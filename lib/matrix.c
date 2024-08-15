@@ -70,3 +70,9 @@ void print_matrix(struct Matrix m) {
 	}
 	printf("\n");
 }
+
+void matrix_multiply_elementwise(struct Matrix* a, struct Matrix* b) {
+	for (int i = 0; i < a->cols * a->rows; i++) {
+		a->data[i] *= b->data[i];
+	}
+}
