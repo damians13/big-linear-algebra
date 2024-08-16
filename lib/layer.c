@@ -51,13 +51,13 @@ void do_back_propagate_errors(struct Layer* l, struct Layer* next_layer, struct 
 	}
 	
 	struct Matrix* activation_ddx_of_next_layer_raw_nodes = clone_matrix(*next_layer->raw_nodes);
-	next_layer->activation_ddx(activation_ddx_of_next_layer_raw_nodes, next_layer->num_nodes);
+	next_layer->activation_ddx(activation_ddx_of_next_layer_raw_nodes->data, next_layer->num_nodes);
 	struct Matrix* cost_ddx_current_layer_activation = matrix_multiply(*next_layer->weights, *activation_ddx_of_next_layer_raw_nodes);
 	matrix_multiply_elementwise(cost_ddx_current_layer_activation, cost_ddx_next_layer_activation);
 	free_matrix(activation_ddx_of_next_layer_raw_nodes);
 
 	struct Matrix* biases_change = clone_matrix(*l->raw_nodes);
-	l->activation_ddx(biases_change, l->num_nodes);
+	l->activation_ddx(biases_change->data, l->num_nodes);
 	matrix_multiply_elementwise(biases_change, cost_ddx_current_layer_activation);
 	matrix_scale(biases_change, -learn_rate);
 
@@ -90,7 +90,7 @@ void back_propagate_errors(struct Layer* l, float* expectations, float learn_rat
 	}
 
 	struct Matrix* biases_change = clone_matrix(*l->raw_nodes);
-	l->activation_ddx(biases_change, l->num_nodes);
+	l->activation_ddx(biases_change->data, l->num_nodes);
 	matrix_multiply_elementwise(biases_change, cost_ddx_current_layer_activation);
 	matrix_scale(biases_change, -learn_rate);
 
