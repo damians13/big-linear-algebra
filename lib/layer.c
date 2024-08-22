@@ -97,7 +97,7 @@ void back_propagate_errors(struct Layer* l, float* expectations, float learn_rat
 	// Temporarily transpose
 	biases_change->cols = biases_change->rows;
 	biases_change->rows = 1;
-	struct Matrix* weights_change = matrix_multiply(*biases_change, *l->previous_layer->nodes);
+	struct Matrix* weights_change = matrix_multiply(*l->previous_layer->nodes, *biases_change);
 	// Untranspose
 	biases_change->rows = biases_change->cols;
 	biases_change->cols = 1;

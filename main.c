@@ -10,6 +10,12 @@ void activation(float* data, int num) {
 	}
 }
 
+void activation_ddx(float* data, int num) {
+	for (int i = 0; i < num; i++) {
+		data[i] = 0.1;
+	}
+}
+
 int main(int argc, char** argv) {
 	float data[] = {
 		1, 2, 3, 
@@ -34,33 +40,49 @@ int main(int argc, char** argv) {
 	print_matrix(*m3);
 	free_matrix(m3);
 
-	float* v = read_csv_contents("store/a.csv");
+	float* v = read_csv_contents("data/a.csv");
 	for (int i = 0; i < 9; i++) {
 		printf("%.5f\n", v[i]);
 	}
 	free(v);
 
 	float d[] = {1, 2.3, 4.567, 0, 0, 0};
-	write_csv_contents("store/b.csv", d, 3, 2);
+	write_csv_contents("data/b.csv", d, 3, 2);
 
 	struct Layer input;
 	input.num_nodes = 3;
 	input.has_previous_layer = 0;
-	input.nodes = make_matrix(3, 1, read_csv_contents("store/inputs.csv"));
+	input.nodes = make_matrix(3, 1, read_csv_contents("data/inputs.csv"));
 	input.has_nodes = 1;
+
+	struct Layer hidden = { 2, 0, 0, 0, 0, &input, &activation, &activation_ddx, 1, 0 };
+	load_weights_from_csv(&hidden, "data/weights.csv");
+	load_biases_from_csv(&hidden, "data/biases.csv");
 
 	struct Layer output;
 	output.num_nodes = 2;
-	output.previous_layer = &input;
+	output.previous_layer = &hidden;
 	output.has_previous_layer = 1;
 	output.has_nodes = 0;
 	output.activation = &activation;
-	load_weights_from_csv(&output, "store/weights.csv");
-	load_biases_from_csv(&output, "store/biases.csv");
+	output.activation_ddx = &activation_ddx;
+	load_weights_from_csv(&output, "data/weights.csv");
+	load_biases_from_csv(&output, "data/biases.csv");
 
+	feed_forward(&hidden);
 	feed_forward(&output);
 	print_matrix(*output.nodes);
 
+	print_matrix(*output.weights);
+	print_matrix(*output.biases);
+
+	float expectations[] = { 0.5, 0.5 };
+	back_propagate_errors(&output, expectations, 0.05);
+
+	print_matrix(*output.weights);
+	print_matrix(*output.biases);
+
 	free_layer_data(output);
-	free_layer_data(input);
+	free_layer_data(hidden);
+	free_matrix(input.nodes);
 }
