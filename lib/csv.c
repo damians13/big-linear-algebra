@@ -35,7 +35,7 @@ float* read_csv_contents(const char* filepath) {
 	char c = '\0';
 	while (!feof(f)) {
 		c = fgetc(f);
-		if (c == ',') {
+		if (c == ',' || (c == '\n' && charCount != 0)) {
 			digitString[charCount] = '\0';
 			values[digitCount] = atof(digitString);
 			charCount = 0;
