@@ -30,7 +30,12 @@ void free_matrix(struct Matrix* m) {
 	free(m);
 }
 
+// If a is mxn anad b is nxp, then the resulting matrix is mxp
 struct Matrix* matrix_multiply(struct Matrix a, struct Matrix b) {
+	if (a.cols != b.rows) {
+		printf("Attempted to multiply %dx%d matrix by %dx%d matrix, exiting\n", a.rows, a.cols, b.rows, b.cols);
+		exit(1);
+	}
 	float* data = malloc(b.cols * a.rows * sizeof(float));
 	struct Matrix* m = make_matrix(a.rows, b.cols, data);
 	for (int i = 0; i < b.cols; i++) {
@@ -72,7 +77,26 @@ void print_matrix(struct Matrix m) {
 }
 
 void matrix_multiply_elementwise(struct Matrix* a, struct Matrix* b) {
+	if (a->cols != b->cols || a->rows != b->rows) {
+		printf("Attempted to multiply elements of %dx%d matrix by %dx%d matrix, exiting\n", a->rows, a->cols, b->rows, b->cols);
+		exit(1);
+	}
 	for (int i = 0; i < a->cols * a->rows; i++) {
 		a->data[i] *= b->data[i];
 	}
+}
+
+void matrix_transpose(struct Matrix* m) {
+	struct Matrix* clone = clone_matrix(*m);
+
+	m->rows = m->cols;
+	m->cols = clone->rows;
+
+	for (int i = 0; i < m->rows; i++) {
+		for (int j = 0; j < m->cols; j++) {
+			m->data[i * m->cols + j] = clone->data[j * clone->cols + i];
+		}
+	}
+
+	free(clone);
 }

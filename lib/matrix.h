@@ -16,5 +16,6 @@ void matrix_scale(struct Matrix* m, float f);
 void matrix_add(struct Matrix* a, struct Matrix* b);
 void print_matrix(struct Matrix m);
 void matrix_multiply_elementwise(struct Matrix* a, struct Matrix* b);
+void matrix_transpose(struct Matrix* m);
 
 #endif

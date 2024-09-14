@@ -49,11 +49,13 @@ void do_back_propagate_errors(struct Layer* l, struct Layer* next_layer, struct 
 	if (!l->has_previous_layer) {
 		return;
 	}
-	
+
 	struct Matrix* activation_ddx_of_next_layer_raw_nodes = clone_matrix(*next_layer->raw_nodes);
 	next_layer->activation_ddx(activation_ddx_of_next_layer_raw_nodes->data, next_layer->num_nodes);
+	matrix_multiply_elementwise(activation_ddx_of_next_layer_raw_nodes, cost_ddx_next_layer_activation);
+	matrix_transpose(next_layer->weights);
 	struct Matrix* cost_ddx_current_layer_activation = matrix_multiply(*next_layer->weights, *activation_ddx_of_next_layer_raw_nodes);
-	matrix_multiply_elementwise(cost_ddx_current_layer_activation, cost_ddx_next_layer_activation);
+	matrix_transpose(next_layer->weights);
 	free_matrix(activation_ddx_of_next_layer_raw_nodes);
 
 	struct Matrix* biases_change = clone_matrix(*l->raw_nodes);
@@ -61,13 +63,9 @@ void do_back_propagate_errors(struct Layer* l, struct Layer* next_layer, struct 
 	matrix_multiply_elementwise(biases_change, cost_ddx_current_layer_activation);
 	matrix_scale(biases_change, -learn_rate);
 
-	// Temporarily transpose
-	biases_change->cols = biases_change->rows;
-	biases_change->rows = 1;
+	matrix_transpose(l->previous_layer->nodes);
 	struct Matrix* weights_change = matrix_multiply(*biases_change, *l->previous_layer->nodes);
-	// Untranspose
-	biases_change->rows = biases_change->cols;
-	biases_change->cols = 1;
+	matrix_transpose(l->previous_layer->nodes);
 
 	do_back_propagate_errors(l->previous_layer, l, cost_ddx_current_layer_activation, learn_rate);
 
@@ -94,13 +92,9 @@ void back_propagate_errors(struct Layer* l, float* expectations, float learn_rat
 	matrix_multiply_elementwise(biases_change, cost_ddx_current_layer_activation);
 	matrix_scale(biases_change, -learn_rate);
 
-	// Temporarily transpose
-	biases_change->cols = biases_change->rows;
-	biases_change->rows = 1;
-	struct Matrix* weights_change = matrix_multiply(*l->previous_layer->nodes, *biases_change);
-	// Untranspose
-	biases_change->rows = biases_change->cols;
-	biases_change->cols = 1;
+	matrix_transpose(l->previous_layer->nodes);
+	struct Matrix* weights_change = matrix_multiply(*biases_change, *l->previous_layer->nodes);
+	matrix_transpose(l->previous_layer->nodes);
 
 	do_back_propagate_errors(l->previous_layer, l, cost_ddx_current_layer_activation, learn_rate);
 

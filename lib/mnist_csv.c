@@ -1,40 +1,47 @@
 #include "mnist_csv.h"
 #include <stdlib.h>
-#include "csv.h"
+#include <stdio.h>
 
-const char* TRAINING_FILEPATH = "data/mnist/mnist_debug.csv";
-const char* TESTING_FILEPATH = "data/mnist/mnist_test.csv";
-float* training_data;
-float* testing_data;
-int training_data_index;
-int testing_data_index;
+int get_next_data(struct MnistCSV* csv) {
+	if (feof(csv->file)) {
+		printf("CSV file is empty\n");
+		return 1;
+	}
 
-void load_training_data() {
-	training_data = read_csv_contents(TRAINING_FILEPATH);
-	training_data_index = 0;
+	int index = 0;
+	int charCount = 0;
+	char digitString[4];
+	while (index < 785) {
+		char c = fgetc(csv->file);
+		if (c == ',' || (c == '\n' && charCount != 0)) {
+			digitString[charCount] = '\0';
+			csv->buffer[index] = atoi(digitString);
+			charCount = 0;
+			index++;
+		} else if (c != '\n') {
+			digitString[charCount] = c;
+			charCount++;
+		}
+	}
+
+	return 0;
 }
 
-void load_testing_data() {
-	testing_data = read_csv_contents(TESTING_FILEPATH);
-	testing_data_index = 0;
-}
-
-float* get_next_training_data() {
-	float* address = training_data + training_data_index * 784;
-	training_data_index++;
-	return address;
-}
-
-float* get_next_testing_data() {
-	float* address = testing_data + testing_data_index * 784;
-	testing_data_index++;
-	return address;
-}
-
-void free_training_data() {
-	free(training_data);
-}
-
-void free_testing_data() {
-	free(testing_data);
+void visualize_digit_data(struct MnistCSV* csv) {
+	int* digit = csv->buffer;
+	printf("============================\n");
+	printf("Data for digit %d:\n", digit[0]);
+	for (int i = 0; i < 28; i++) {
+		for (int j = 0; j < 28; j++) {
+			if (digit[i * 28 + j + 1] < 80) {
+				printf(" ");
+			} else if (digit[i * 28 + j + 1] < 150) {
+				printf(":");
+			} else {
+				printf("#");
+			}
+		}
+		printf("\n");
+	}
+	printf("============================\n");
 }
