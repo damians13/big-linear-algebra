@@ -61,3 +61,25 @@ void write_csv_contents(const char* filepath, float* data, int cols, int rows) {
 	fflush(f);
 	fclose(f);
 }
+
+// Handy snippet from https://stackoverflow.com/a/70708991
+int count_num_lines(FILE* f) {
+	#define BUFFER_SIZE 65536
+	char buffer[BUFFER_SIZE];
+	int count = 0;
+	while (1) {
+		size_t result = fread(buffer, 1, BUFFER_SIZE, f);
+		if (ferror(f)) {
+			return -1;
+		}
+		for (int i = 0; i < result; i++) {
+			if (buffer[i] == '\n') {
+				count++;
+			}
+		}
+		if (feof(f)) {
+			break;
+		}
+	}
+	return count;
+}
