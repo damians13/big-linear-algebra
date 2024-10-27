@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <float.h>
 
 #define FILEPATH_X_OFFSET 25
 
@@ -23,12 +24,78 @@ void init() {
 	}
 }
 
+// For debugging to verify that the gradients are slowly approaching a minimum
 float norm(struct Matrix m) {
 	float total = 0.0f;
 	for (int i = 0; i < m.rows * m.cols; i++) {
 		total += m.data[i] * m.data[i];
 	}
 	return sqrt(total);
+}
+
+void run(int num, int log_update_every) {
+	char filepath[] = "data/mnist_hinge/weights_x.csv";
+	struct Matrix input_nodes = { 784, 1, 0};
+	struct Matrix ensemble_weights[10];
+	for (int i = 0; i < 10; i++) {
+		filepath[FILEPATH_X_OFFSET] = i + '0';
+		struct Matrix m = { 1, 784, read_csv_contents(filepath) }; // Stored as 1 x 784 for multiplication later
+		ensemble_weights[i] = m;
+	}
+
+	struct MnistCSV testing_data = {
+		fopen("data/mnist/mnist_test.csv", "r"),
+		malloc(785 * sizeof(float))
+	};
+
+	if (num == -1) {
+		num = count_num_lines(testing_data.file);
+		rewind(testing_data.file);
+	}
+
+	int num_correct = 0;
+	for (int i = 0; i < num; i++) {
+		get_next_data(&testing_data);
+		int expectation = (int) testing_data.buffer[0];
+		input_nodes.data = testing_data.buffer + 1;
+		matrix_scale(&input_nodes, 1 / 255.0F);
+
+		float predictions[10];
+
+		// Predict
+		float highest_value = FLT_MIN;
+		int most_likely_digit = -1;
+		for (int p = 0; p < 10; p++) {
+			struct Matrix* output = matrix_multiply(ensemble_weights[p], input_nodes);
+			predictions[p] = 1 - output->data[0];
+			if (predictions[p] > highest_value) {
+				highest_value = predictions[p];
+				most_likely_digit = p;
+			}
+			free(output);
+		}
+
+		if (most_likely_digit == expectation) {
+			num_correct++;
+		}
+
+		// Logging
+		if (i % log_update_every == log_update_every - 1) {
+			printf("Digit %d:\n", i);
+			visualize_digit_data(&testing_data);
+			if (most_likely_digit == expectation) {
+				printf("\e[1;32mCORRECT\e[m\n"); // Print CORRECT in bold green 
+			} else {
+				printf("\e[1;31mINCORRECT\e[m predicted %d instead of %d\n", most_likely_digit, expectation); // Print INCORRECT in bold red 
+			}
+			for (int p = 0; p < 10; p++) {
+				printf("\tModel %d: %.2f\n", p, predictions[p]);
+			}
+			printf("\n");
+		}
+	}
+
+	printf("Finished running with accuracy %.5f\n", (float) num_correct / (float) num);
 }
 
 void train(int iterations, float learn_rate) {
@@ -45,9 +112,7 @@ void train(int iterations, float learn_rate) {
 		fopen("data/mnist/mnist_train.csv", "r"),
 		malloc(785 * sizeof(float))
 	};
-	int num_correct = 0;
-	// int num_training_examples = count_num_lines(training_data.file);
-	int num_training_examples = 5000; //TODO undo
+	int num_training_examples = count_num_lines(training_data.file);
 	rewind(training_data.file);
 
 	struct Matrix gradients[10];
@@ -84,12 +149,26 @@ void train(int iterations, float learn_rate) {
 			}
 		}
 
-		// printf("Gradient norms after iteration %d:\n", i);
+		int logUpdate = i % 10 == 9;
+		if (logUpdate) {
+			printf("Gradient norms after iteration %d:\n", i);
+		}
+		float gradient_norm_sum = 0;
 		// Update weights for each model
 		for (int j = 0; j < 10; j++) {
-			// printf("\tModel %d: %.5f\n", j, norm(gradients[j]));
+			float norm_value = norm(gradients[j]) / num_training_examples;
+			if (logUpdate) {
+				printf("\tModel %d: %.5f\n", j, norm_value);
+			}
+			gradient_norm_sum += norm_value;
 			matrix_scale(&gradients[j], learn_rate);
 			matrix_add(&ensemble_weights[j], &gradients[j]);
+		}
+
+		float epsilon = 0.05;
+		if (gradient_norm_sum < epsilon) {
+			printf("Gradient converged < epsilon after iteration %d\n", i);
+			break;
 		}
 		
 		// End of the iteration, go back to the start of the training data file
@@ -110,22 +189,22 @@ void train(int iterations, float learn_rate) {
 }
 
 /**
- * An ensemble model made up of 10 logistic regression models (1 for each digit) to serve as binary classifiers for MNIST data
+ * An ensemble model made up of 10 linear regression models using Hinge loss to serve as binary classifiers for MNIST data
  */
 int main(int argc, char** argv) {
 	if (argc < 2) {
-		printf("Please supply an argument, options:\n\trun\n\ttrain <iterations> <learn_rate>\n\tinit\n");
+		printf("Please supply an argument, options:\n\trun <num> [<output_every_n = 1>]\n\ttrain <iterations> <learn_rate>\n\tinit\n");
 		exit(1);
 	}
 	if (strncmp(argv[1], "run", 3) == 0) {
 		if (argc < 3) {
-			printf("Please supply a number of samples to use, usage:\n\run <num> [<output_every_n = 1>]\n");
+			printf("Please supply a number of samples to use (or -1 for all), usage:\n\run <num> [<output_every_n = 1>]\n");
 			exit(1);
 		}
 		if (argc < 4) {
-			// run(atoi(argv[2]), 1);
+			run(atoi(argv[2]), 1);
 		} else {
-			// run(atoi(argv[2]), atoi(argv[3]));
+			run(atoi(argv[2]), atoi(argv[3]));
 		}
 	} else if (strncmp(argv[1], "train", 5) == 0) {
 		if (argc < 4) {
