@@ -1,6 +1,7 @@
 #include "mnist_csv.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <math.h>
 
 int get_next_data(struct MnistCSV* csv) {
 	if (feof(csv->file)) {

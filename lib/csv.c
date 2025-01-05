@@ -21,11 +21,17 @@ float* read_csv_contents(const char* filepath) {
 		printf("CSV file at %s is empty\n", filepath);
 		return 0;
 	}
+	return read_csv_contents_file(f, NULL);
+}
 
+// Side-effect: closes f
+float* read_csv_contents_file(FILE* f, int* num_values) {
 	int numValues = get_num_values(f); // Seeks f to end of file
+	if (num_values != NULL) {
+		*num_values = numValues;
+	}
 	long numChars = ftell(f);
 	rewind(f);
-	
 	float* values = malloc(numValues * sizeof(float));
 	int digitCount = 0;
 
@@ -40,7 +46,7 @@ float* read_csv_contents(const char* filepath) {
 			values[digitCount] = atof(digitString);
 			charCount = 0;
 			digitCount++;
-		} else if (c != '\n') {
+		} else if (c != '\n' && c != '\r') {
 			digitString[charCount] = c;
 			charCount++;
 		}
