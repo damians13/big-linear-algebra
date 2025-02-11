@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin bash
 rm dist/*
 # gcc -c main.c -g -std=c99 -o dist/main.o
 # gcc -c model/my_first_model.c -g -std=c99 -o dist/my_first_model.o
