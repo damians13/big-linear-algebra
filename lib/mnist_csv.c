@@ -31,12 +31,12 @@ int get_next_data(struct MnistCSV* csv) {
 void visualize_digit_data(struct MnistCSV* csv) {
 	float* digit = csv->buffer;
 	printf("============================\n");
-	printf("Data for digit %f:\n", digit[0]);
+	printf("Data for digit %.f:\n", digit[0]);
 	for (int i = 0; i < 28; i++) {
 		for (int j = 0; j < 28; j++) {
-			if (digit[i * 28 + j + 1] < 80) {
+			if (digit[i * 28 + j + 1] < 0.32) {
 				printf(" ");
-			} else if (digit[i * 28 + j + 1] < 150) {
+			} else if (digit[i * 28 + j + 1] < 0.6) {
 				printf(":");
 			} else {
 				printf("#");
