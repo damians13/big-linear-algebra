@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 
 // All integers are little-endian
 // https://en.wikipedia.org/wiki/BMP_file_format
@@ -29,7 +30,7 @@ void write_bmp_data(const char* filepath, BMPData* data) {
 	bitmap_header[13] =  0; // 4 bytes for the offset of the first pixel data in the file
 
 	if (write(fd, (void*) bitmap_header, 14) != 14) {
-		fprintf(stderr, "Error while writing bitmap header.\n");
+		fprintf(stderr, "Error while writing bitmap header (errno=%d).\n", errno);
 	}
 
 	uint8_t bitmap_info_header[40];
@@ -75,7 +76,7 @@ void write_bmp_data(const char* filepath, BMPData* data) {
 	bitmap_info_header[39] = 0; // 4 bytes for number of important colours in the image
 
 	if (write(fd, (void*) bitmap_info_header, 40) != 40) {
-		fprintf(stderr, "Error while writing bitmap info header.\n");
+		fprintf(stderr, "Error while writing bitmap info header (errno=%d).\n", errno);
 	}
 
 	uint8_t* pixel_data = malloc(pixel_data_row_size * data->height);
@@ -92,7 +93,7 @@ void write_bmp_data(const char* filepath, BMPData* data) {
 	}
 
 	if (write(fd, (void*) pixel_data, pixel_data_row_size * data->height) != pixel_data_row_size * data->height) {
-		fprintf(stderr, "Error while writing bitmap pixel data.\n");
+		fprintf(stderr, "Error while writing bitmap pixel data (errno=%d).\n", errno);
 	}
 
 	free(pixel_data);

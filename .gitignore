@@ -1,3 +1,4 @@
 .vscode
 dist
 data/mnist
+data/cifar
