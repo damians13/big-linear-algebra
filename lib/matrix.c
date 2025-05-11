@@ -39,16 +39,21 @@ struct Matrix* matrix_multiply(struct Matrix a, struct Matrix b) {
 	}
 	matrix_float_t* data = malloc(b.cols * a.rows * sizeof(matrix_float_t));
 	struct Matrix* m = make_matrix(a.rows, b.cols, data);
-	for (int i = 0; i < b.cols; i++) {
-		for (int j = 0; j < a.rows; j++) {
+	matrix_multiply_inplace(&a, &b, m);
+	return m;
+}
+
+// c = a @ b
+void matrix_multiply_inplace(Matrix* a, Matrix* b, Matrix* c) {
+	for (int i = 0; i < b->cols; i++) {
+		for (int j = 0; j < a->rows; j++) {
 			matrix_float_t sum = 0;
-			for (int k = 0; k < a.cols; k++) {
-				sum += a.data[j * a.cols + k] * b.data[k * b.cols + i];
+			for (int k = 0; k < a->cols; k++) {
+				sum += a->data[j * a->cols + k] * b->data[k * b->cols + i];
 			}
-			data[j * b.cols + i] = sum;
+			c->data[j * b->cols + i] = sum;
 		}
 	}
-	return m;
 }
 
 void matrix_scale(struct Matrix* m, matrix_float_t f) {

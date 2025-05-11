@@ -12,4 +12,6 @@ gcc -c lib/csv.c -g -std=c99 -o dist/csv.o
 # gcc -c lib/mnist_csv2.c -g -std=c99 -o dist/mnist_csv2.o
 gcc -c lib/bmp.c -g -std=c99 -o dist/bmp.o
 gcc -c lib/cifar10.c -g -std=c99 -o dist/cifar10.o
+gcc -c lib/conv.c -g -std=c99 -o dist/conv.o
+gcc -c lib/norm.c -g -std=c99 -o dist/norm.o
 gcc dist/* -g -std=c99 -o dist/main -lm

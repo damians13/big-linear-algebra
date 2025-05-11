@@ -15,7 +15,6 @@ struct Matrix* clone_matrix(struct Matrix m);
 void free_matrix_data(struct Matrix* m);
 void free_matrix(struct Matrix* m);
 struct Matrix* matrix_multiply(struct Matrix a, struct Matrix b);
-struct Matrix* matrix_multiply_debug(struct Matrix a, struct Matrix b);
 void matrix_scale(struct Matrix* m, matrix_float_t f);
 void matrix_add(struct Matrix* a, struct Matrix* b);
 void print_matrix(struct Matrix m);
@@ -28,5 +27,7 @@ matrix_float_t frobenius_norm(struct Matrix m);
 matrix_float_t max_value(struct Matrix m);
 void matrix_z_score_normalize(Matrix* m);
 void matrix_add_tile_columns(struct Matrix* a, struct Matrix* b);
+
+void matrix_multiply_inplace(Matrix* a, Matrix* b, Matrix* c);
 
 #endif
