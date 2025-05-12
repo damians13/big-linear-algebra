@@ -1,6 +1,7 @@
 #include "../lib/bmp.h"
 #include "../lib/cifar10.h"
 #include "../lib/conv.h"
+#include "../lib/util.h"
 #include <stdlib.h>
 #include <stdint.h>
 #include <fcntl.h>
@@ -169,6 +170,20 @@ void load_example(Matrix* x, int fd) {
 			}
 		}
 	}
+}
+
+void compute_attention(Matrix* X, SelfAttentionParams* params, SelfAttentionData* data) {
+	// Computes unmasked scaled dot product attention
+	int key_dimension = params->K_proj->cols;
+	matrix_multiply_inplace(X, params->Q_proj, data->Q_proj);
+	matrix_multiply_inplace(X, params->K_proj, data->K_proj);
+	matrix_multiply_inplace(X, params->V_proj, data->V_proj);
+	matrix_transpose(data->K_proj);
+	matrix_multiply_inplace(data->Q_proj, data->K_proj, data->attention);
+	matrix_transpose(data->K_proj);
+	matrix_scale(data->attention, 1.0 / sqrt(key_dimension));
+	softmax(data->attention->data, data->attention->rows, data->attention->cols);
+	matrix_multiply_inplace(data->attention, data->V_proj, data->result);
 }
 
 void init() {}
