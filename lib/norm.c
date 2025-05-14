@@ -1,6 +1,6 @@
 #include "norm.h"
 
-void group_norm(Matrix* in, Matrix* out, matrix_float_t* stdevs, int channels, int group_size) {
+void group_norm(Matrix* in, Matrix* out, matrix_float_t* stdevs, matrix_float_t* means, int channels, int group_size) {
     int num_groups = (channels + group_size - 1) / group_size;
     for (int g = 0; g < num_groups; g++) {
         matrix_float_t mean = 0;
@@ -13,6 +13,7 @@ void group_norm(Matrix* in, Matrix* out, matrix_float_t* stdevs, int channels, i
             }
         }
         mean /= group_size * in[0].rows * in[0].cols;
+        means[g] = mean; // Store the mean for the backward pass
 
         // Use a second pass to calculate the standard deviation for better stability
         matrix_float_t stdev = 0;

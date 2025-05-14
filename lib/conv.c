@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <math.h>
 
+// TODO: Preserve spatial dimensions with padding
 // `in` must be an arrays of `Matrix`es of size `in_channels`
 void _im2col(Matrix* in, Matrix* out, int kernel_size, int in_channels, int stride) {
     int num_horizontal_convolutions = ceil((float) (in[0].cols - kernel_size) / stride) + 1;
@@ -29,6 +30,7 @@ void _im2col(Matrix* in, Matrix* out, int kernel_size, int in_channels, int stri
     }
 }
 
+// TODO: Preserve spatial dimensions with padding
 // `out` and `kernel` must be arrays of `Matrix` of size `out_channels`
 void _col2im(Matrix* in, Matrix* out, int kernel_size, int out_channels, int stride) {
     int num_horizontal_convolutions = (int)ceil((float)(out[0].cols - kernel_size) / stride) + 1;
@@ -99,7 +101,7 @@ void _reshape_matrix_kernels(Matrix* matrix, Matrix** kernels) {
 }
 
 // Combine height and width dimensions to produce a matrix. Channels: (C, H, W). Matrix: (H * W, C)
-void _reshape_channels_matrix(Matrix* channels, Matrix* matrix) {
+void reshape_channels_matrix(Matrix* channels, Matrix* matrix) {
     int num_channels = matrix->cols;
     int height = channels[0].rows;
     int width = channels[0].cols;
@@ -115,7 +117,7 @@ void _reshape_channels_matrix(Matrix* channels, Matrix* matrix) {
 }
 
 // Split up a matrix into height and width dimensions by channel. Channels: (C, H, W). Matrix: (H * W, C)
-void _reshape_matrix_channels(Matrix* matrix, Matrix* channels) {
+void reshape_matrix_channels(Matrix* matrix, Matrix* channels) {
     int num_channels = matrix->cols;
     int height = channels[0].rows;
     int width = channels[0].cols;
@@ -136,5 +138,5 @@ void conv(Matrix* X, Matrix** kernels, ConvData* data, int in_channels, int out_
     _im2col(X, data->im2col, kernel_size, in_channels, stride); // (output_height * output_width, kernel_height * kernel_width * image_channels)
     _reshape_kernels_matrix(kernels, data->kernel_matrix); // (kernel_height * kernel_width * image_channels, output_channels)
     matrix_multiply_inplace(data->im2col, data->kernel_matrix, data->product); // (output_height * output_width, output_channels)
-    _reshape_matrix_channels(data->product, data->output); // (output_channels, output_height, output_width)
+    reshape_matrix_channels(data->product, data->output); // (output_channels, output_height, output_width)
 }

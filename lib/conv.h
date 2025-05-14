@@ -11,5 +11,7 @@ typedef struct ConvData {
 } ConvData;
 
 void conv(Matrix* X, Matrix** kernels, ConvData* data, int in_channels, int out_channels, int stride);
+void reshape_channels_matrix(Matrix* channels, Matrix* matrix);
+void reshape_matrix_channels(Matrix* matrix, Matrix* channels);
 
 #endif
