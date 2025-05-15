@@ -1,67 +1,137 @@
 #include "conv.h"
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <math.h>
 
-// TODO: Preserve spatial dimensions with padding
-// `in` must be an arrays of `Matrix`es of size `in_channels`
+// `in` must be an arrays of `Matrix`es of size `in_channels`. Uses "same" padding
 void _im2col(Matrix* in, Matrix* out, int kernel_size, int in_channels, int stride) {
-    int num_horizontal_convolutions = ceil((float) (in[0].cols - kernel_size) / stride) + 1;
-    int num_vertical_convolutions = ceil((float) (in[0].rows - kernel_size) / stride) + 1;
-    int out_row_width = kernel_size * kernel_size * in_channels;
+    int height = in[0].rows;
+    int width = in[0].cols;
 
-    for (int i = 0; i < num_vertical_convolutions; i++) {
-        for (int j = 0; j < num_horizontal_convolutions; j++) {
-            int out_row_index = i * num_horizontal_convolutions + j;
+    // Formulas from a google search
+    int vertical_padding = (ceil(((float) height) / stride) - 1) * stride + kernel_size - height;
+    if (vertical_padding < 0) {
+        vertical_padding = 0;
+    }
+    int horizontal_padding = (ceil(((float) width) / stride) - 1) * stride + kernel_size - width;
+    if (horizontal_padding < 0) {
+        horizontal_padding = 0;
+    }
+    int pad_top = vertical_padding / 2; // Floor
+    int pad_bottom = (vertical_padding + 1) / 2; // Ceil
+    int pad_left = horizontal_padding / 2; // Floor
+    int pad_right = (horizontal_padding + 1) / 2; // Ceil
+
+    int padded_height = vertical_padding + height;
+    int padded_width = horizontal_padding + width;
+    int padded_size = padded_width * padded_height;
+
+    matrix_float_t* padded_data = malloc(in_channels * padded_size * sizeof(matrix_float_t));
+    for (int c = 0; c < in_channels; c++) {
+        for (int i = 0; i < pad_top; i++) {
+            for (int j = 0; j < padded_width; j++) {
+                padded_data[c * padded_size + i * padded_width + j] = 0;
+            }
+        }
+        for (int i = 0; i < height; i++) {
+            for (int j = 0; j < pad_left; j++) {
+                padded_data[c * padded_size + (i + pad_top) * padded_width + j] = 0;
+            }
+            for (int j = 0; j < width; j++) {
+                padded_data[c * padded_size + (i + pad_top) * padded_width + j + pad_left] = in[c].data[i * width + j];
+            }
+            for (int j = 0; j < pad_right; j++) {
+                padded_data[c * padded_size + (i + pad_top) * padded_width + j + pad_left + width] = 0;
+            }
+        }
+        for (int i = 0; i < pad_bottom; i++) {
+            for (int j = 0; j < padded_width; j++) {
+                padded_data[c * padded_size + (i + pad_top + height) * padded_width + j] = 0;
+            }
+        }
+    }
+
+    int out_row_width = kernel_size * kernel_size * in_channels;
+    int out_height = (int) ceil((float) height / stride);
+    int out_width = (int) ceil((float) width / stride);
+
+    for (int i = 0; i < out_height; i++) {
+        for (int j = 0; j < out_width; j++) {
+            int out_row_index = i * out_width + j;
             for (int c = 0; c < in_channels; c++) {
                 for (int k = 0; k < kernel_size; k++) {
                     for (int l = 0; l < kernel_size; l++) {
                         int out_index = out_row_index * out_row_width + c * kernel_size * kernel_size + k * kernel_size + l;
                         int in_row = i * stride + k;
                         int in_col = j * stride + l;
-                        if (in_row < in[c].rows && in_col < in[c].cols) {
-                            out->data[out_index] = in[c].data[in_row * in[c].cols + in_col];
-                        } else {
-                            out->data[out_index] = 0;
-                        }
+                        int in_index = c * padded_size + in_row * padded_width + in_col;
+                        out->data[out_index] = padded_data[in_index];
                     }
                 }
             }
         }
     }
+
+    free(padded_data);
 }
 
-// TODO: Preserve spatial dimensions with padding
-// `out` and `kernel` must be arrays of `Matrix` of size `out_channels`
+// `out` and `kernel` must be arrays of `Matrix` of size `out_channels`. Uses "same" padding
 void _col2im(Matrix* in, Matrix* out, int kernel_size, int out_channels, int stride) {
-    int num_horizontal_convolutions = (int)ceil((float)(out[0].cols - kernel_size) / stride) + 1;
-    int num_vertical_convolutions = (int)ceil((float)(out[0].rows - kernel_size) / stride) + 1;
+    int height = out[0].rows;
+    int width = out[0].cols;
+
+    // Formulas from a google search
+    int vertical_padding = (ceil(((float) height) / stride) - 1) * stride + kernel_size - height;
+    if (vertical_padding < 0) {
+        vertical_padding = 0;
+    }
+    int horizontal_padding = (ceil(((float) width) / stride) - 1) * stride + kernel_size - width;
+    if (horizontal_padding < 0) {
+        horizontal_padding = 0;
+    }
+    int pad_top = vertical_padding / 2; // Floor
+    int pad_bottom = (vertical_padding + 1) / 2; // Ceil
+    int pad_left = horizontal_padding / 2; // Floor
+    int pad_right = (horizontal_padding + 1) / 2; // Ceil
+
+    int padded_height = vertical_padding + height;
+    int padded_width = horizontal_padding + width;
+    int padded_size = padded_width * padded_height;
+
+    matrix_float_t* padded_data = malloc(out_channels * padded_size * sizeof(matrix_float_t));
+
     int in_row_width = kernel_size * kernel_size * out_channels;
 
-    for (int i = 0; i < out_channels; i++) {
-        for (int j = 0; j < out[i].rows; j++) {
-            for (int k = 0; k < out[i].cols; k++) {
-                out[i].data[j * out[i].cols + k] = 0;
-            }
-        }
-    }
+    memset(padded_data, 0, out_channels * padded_size * sizeof(matrix_float_t));
 
-    for (int i = 0; i < num_vertical_convolutions; i++) {
-        for (int j = 0; j < num_horizontal_convolutions; j++) {
-            int in_row_index = i * num_horizontal_convolutions + j;
+    for (int i = 0; i < height; i++) {
+        for (int j = 0; j < width; j++) {
+            int in_row_index = i * width + j;
             for (int c = 0; c < out_channels; c++) {
                 for (int k = 0; k < kernel_size; k++) {
                     for (int l = 0; l < kernel_size; l++) {
                         int in_index = in_row_index * in_row_width + c * kernel_size * kernel_size + k * kernel_size + l;
                         int out_row = (i * stride) + k;
                         int out_col = (j * stride) + l;
-                        if (out_row < out[c].rows && out_col < out[c].cols) {
-                            out[c].data[out_row * out[c].cols + out_col] += in->data[in_index];
-                        }
+                        int out_index = c * padded_size + out_row * padded_width + out_col;
+                        padded_data[out_index] += in->data[in_index];
                     }
                 }
             }
         }
     }
+
+    // Crop out padding
+    for (int c = 0; c < out_channels; c++) {
+        for (int i = 0; i < height; i++) {
+            for (int j = 0; j < width; j++) {
+                out[c].data[i * width + j] = padded_data[c * padded_size + (i + pad_top) * padded_width + j + pad_left];
+            }
+        }
+    }
+
+    free(padded_data);
 }
 
 // Combine kernel height, width, and channel dimensions to produce a matrix. Kernels: (F, C, H, W). Matrix: (H * W * C, F)
