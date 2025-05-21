@@ -1,7 +1,9 @@
 #include "../lib/bmp.h"
 #include "../lib/cifar10.h"
 #include "../lib/conv.h"
+#include "../lib/norm.h"
 #include "../lib/util.h"
+#include "../lib/csv.h"
 #include <stdlib.h>
 #include <stdint.h>
 #include <fcntl.h>
@@ -31,6 +33,7 @@ const int TIME_EMBED_DIM = 512;
 const int KERNEL_SIZE = 3;
 const int GROUP_SIZE = 32;
 const int SELF_ATTENTION_KEY_DIM = 16;
+const float DROPOUT_RATE = 0.1;
 
 const int RESOLUTION_1_HEIGHT = IMAGE_HEIGHT;
 const int RESOLUTION_1_WIDTH = IMAGE_WIDTH;
@@ -40,6 +43,37 @@ const int RESOLUTION_3_HEIGHT = (RESOLUTION_2_HEIGHT + RESIZE_STRIDE - 1) / RESI
 const int RESOLUTION_3_WIDTH = (RESOLUTION_2_WIDTH + RESIZE_STRIDE - 1) / RESIZE_STRIDE;
 const int RESOLUTION_4_HEIGHT = (RESOLUTION_3_HEIGHT + RESIZE_STRIDE - 1) / RESIZE_STRIDE;
 const int RESOLUTION_4_WIDTH = (RESOLUTION_3_WIDTH + RESIZE_STRIDE - 1) / RESIZE_STRIDE;
+
+const char* DATA_PATH = "data/cifar_unet/";
+const int DATA_PATH_LENGTH = 16;
+const char* DOWN_NAME_FORMAT = "down_%d";
+const int DOWN_NAME_FORMAT_LENGTH = 6;
+const char* MID_NAME_FORMAT = "mid";
+const int MID_NAME_FORMAT_LENGTH = 3;
+const char* UP_NAME_FORMAT = "up_%d";
+const int UP_NAME_FORMAT_LENGTH = 4;
+const char* RESNET_NAME_FORMAT = "_resnet_%d";
+const int RESNET_NAME_FORMAT_LENGTH = 9;
+const char* CONV_NAME_FORMAT = "_conv_%d";
+const int CONV_NAME_FORMAT_LENGTH = 7;
+const char* SELF_ATTENTION_NAME_FORMAT = "_self_attention_%d";
+const int SELF_ATTENTION_NAME_FORMAT_LENGTH = 17;
+const char* KERNEL_NAME_FORMAT = "_kernel_%04d_channel_%04d.csv\0";
+const int KERNEL_NAME_FORMAT_LENGTH = 30;
+const char* TIME_WEIGHT_FORMAT = "_time_weight.csv\0";
+const int TIME_WEIGHT_FORMAT_LENGTH = 17;
+const char* TIME_BIAS_FORMAT = "_time_bias.csv\0";
+const int TIME_BIAS_FORMAT_LENGTH = 15;
+const char* ATTENTION_QUERY_FORMAT = "_query.csv\0";
+const int ATTENTION_QUERY_FORMAT_LENGTH = 11;
+const char* ATTENTION_KEY_FORMAT = "_key.csv\0";
+const int ATTENTION_KEY_FORMAT_LENGTH = 9;
+const char* ATTENTION_VALUE_FORMAT = "_value.csv\0";
+const int ATTENTION_VALUE_FORMAT_LENGTH = 11;
+const char* ATTENTION_WEIGHT_FORMAT = "_weight.csv\0";
+const int ATTENTION_WEIGHT_FORMAT_LENGTH = 12;
+const char* ATTENTION_BIAS_FORMAT = "_bias.csv\0";
+const int ATTENTION_BIAS_FORMAT_LENGTH = 10;
 
 typedef struct ResnetBlockParams {
 	Matrix** conv_1_kernels;
@@ -104,7 +138,6 @@ typedef struct ResnetBlockData {
 	matrix_float_t* group_norm_stdevs_1;
 	Matrix* relu_1; // Group norm -> ReLU
 	ConvData* conv_1;
-	Matrix* time_product; // Without bias, unsummed
 	Matrix* time_dense; // With bias
 	matrix_float_t* group_norm_means_2;
 	matrix_float_t* group_norm_stdevs_2;
@@ -192,18 +225,10 @@ void load_example(Matrix* x, int fd) {
 	}
 }
 
-void compute_attention(Matrix* X, SelfAttentionParams* params, SelfAttentionData* data) {
-	// Computes unmasked scaled dot product attention
-	int key_dimension = params->K_proj->cols;
-	matrix_multiply_inplace(X, params->Q_proj, data->Q_proj);
-	matrix_multiply_inplace(X, params->K_proj, data->K_proj);
-	matrix_multiply_inplace(X, params->V_proj, data->V_proj);
-	matrix_transpose(data->K_proj);
-	matrix_multiply_inplace(data->Q_proj, data->K_proj, data->attention_weights);
-	matrix_transpose(data->K_proj);
-	matrix_scale(data->attention_weights, 1.0 / sqrt(key_dimension));
-	softmax(data->attention_weights->data, data->attention_weights->rows, data->attention_weights->cols);
-	matrix_multiply_inplace(data->attention_weights, data->V_proj, data->attention);
+void multi_channel_relu(Matrix* X, int channels) {
+	for (int i = 0; i < channels; i++) {
+		relu(X[i].data, X[i].rows * X[i].cols);
+	}
 }
 
 void _allocate_conv_kernels_and_data(Matrix** kernels, ConvData* d, int in_height, int in_width, int stride, int kernel_size, int in_channels, int out_channels) {
@@ -274,10 +299,10 @@ void _allocate_resnet_block(ResnetBlockParams* p, ResnetBlockData* d, int embed_
 	d->conv_1 = malloc(sizeof(ConvData));
 	_allocate_conv_kernels_and_data(p->conv_1_kernels, d->conv_1, height, width, 1, kernel_size, in_channels, embed_dim);
 
-	d->time_product = malloc(sizeof(Matrix));
-	d->time_product->rows = time_embed_dim;
-	d->time_product->cols = embed_dim;
-	d->time_product->data = malloc(time_embed_dim * embed_dim * sizeof(matrix_float_t));
+	// d->time_product = malloc(sizeof(Matrix));
+	// d->time_product->rows = time_embed_dim;
+	// d->time_product->cols = embed_dim;
+	// d->time_product->data = malloc(time_embed_dim * embed_dim * sizeof(matrix_float_t));
 
 	d->time_dense = malloc(sizeof(Matrix));
 	d->time_dense->rows = 1;
@@ -536,10 +561,166 @@ void allocate_model_memory(ModelParams* p, ModelData* d) {
 	_allocate_conv_kernels_and_data(p->output_conv_kernels, d->output_conv, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 1, KERNEL_SIZE, RESOLUTION_1_EMBED_DIM, 3);
 }
 
+void _forward_attention(Matrix* X, SelfAttentionParams* params, SelfAttentionData* data) {
+	// Computes unmasked scaled dot product attention
+	int key_dimension = params->K_proj->cols;
+	matrix_multiply_inplace(X, params->Q_proj, data->Q_proj);
+	matrix_multiply_inplace(X, params->K_proj, data->K_proj);
+	matrix_multiply_inplace(X, params->V_proj, data->V_proj);
+	matrix_transpose(data->K_proj);
+	matrix_multiply_inplace(data->Q_proj, data->K_proj, data->attention_weights);
+	matrix_transpose(data->K_proj);
+	matrix_scale(data->attention_weights, 1.0 / sqrt(key_dimension));
+	softmax(data->attention_weights->data, data->attention_weights->rows, data->attention_weights->cols);
+	matrix_multiply_inplace(data->attention_weights, data->V_proj, data->attention);
+}
+
+void _add_time_embedding(Matrix* X, Matrix* time_embedding, int channels) {
+	for (int c = 0; c < channels; c++) {
+		for (int i = 0; i < X[i].rows * X[i].cols; i++) {
+			X[c].data[i] += time_embedding->data[c];
+		}
+	}
+}
+
+void _dropout(Matrix* X, Matrix* Y, int channels) {
+	for (int c = 0; c < channels; c++) {
+		for (int i = 0; i < X[c].rows * X[c].cols; i++) {
+			if ((float) rand() / RAND_MAX < DROPOUT_RATE) {
+				Y[c].data[i] = 0;
+			} else {
+				Y[c].data[i] = X[c].data[i];
+			}
+		}
+	}
+}
+
+void _forward_resnet(Matrix* X, Matrix* time_emb, ResnetBlockParams* p, ResnetBlockData* d, int in_channels, int out_channels, int group_size) {
+	// First chunk
+	group_norm(X, d->relu_1, d->group_norm_stdevs_1, d->group_norm_means_1, in_channels, group_size);
+	multi_channel_relu(d->relu_1, in_channels);
+	conv(d->relu_1, p->conv_1_kernels, d->conv_1, in_channels, out_channels, 1);
+
+	// Time embedding
+	matrix_multiply_inplace(time_emb, p->time_weights, d->time_dense);
+	matrix_add(d->time_dense, p->time_biases);
+	_add_time_embedding(d->conv_1->output, time_emb, out_channels);
+
+	// Second chunk
+	group_norm(d->conv_1->output, d->relu_2, d->group_norm_stdevs_2, d->group_norm_means_2, out_channels, group_size);
+	multi_channel_relu(d->relu_2, out_channels);
+	_dropout(d->relu_2, d->dropout, out_channels);
+	conv(d->dropout, p->conv_2_kernels, d->conv_2, out_channels, out_channels, 1);
+
+	// Skip connection
+	Matrix* residual = X;
+	if (in_channels != out_channels) {
+		conv(X, p->residual_conv_kernels, d->residual_conv, in_channels, out_channels, 1);
+		residual = d->residual_conv->output;
+	}
+	for (int c = 0; c < out_channels; c++) {
+		for (int i = 0; i < d->result->rows * d->result->cols; i++) {
+			d->result[c].data[i] = d->conv_2->output[c].data[i] + residual[c].data[i];
+		}
+	}
+}
+
+void forward(ModelParams* p, ModelData* d) {
+
+}
+
+// For parameters with ReLU non-linearity
+void _init_params_he(Matrix* m, int fan_in) {
+	double scale = sqrt(6.0 / fan_in);
+	for (int i = 0; i < m->rows * m->cols; i++) {
+		m->data[i] = 2 * scale * (double) rand() / RAND_MAX - scale;
+	}
+}
+
+// For parameters with softmax non-linearity
+void _init_params_xavier(Matrix* m, int fan_in, int fan_out) {
+	double scale = sqrt(6.0 / (fan_in + fan_out));
+	for (int i = 0; i < m->rows * m->cols; i++) {
+		m->data[i] = 2 * scale * (double) rand() / RAND_MAX - scale;
+	}
+}
+
+void _save_matrix(Matrix* m, char* filepath) {
+	float* buffer = malloc(m->rows * m->cols * sizeof(float));
+	for (int i = 0; i < m->rows * m->cols; i++) {
+		buffer[i] = (float) m->data[i];
+	}
+	write_csv_contents(filepath, buffer, m->cols, m->rows);
+	free(buffer);
+}
+
+void _init_conv_kernels(Matrix** kernels, int height, int width, int in_channels, int out_channels, char* buffer, int buffer_position) {
+	int fan_in = height * width;
+	for (int i = 0; i < out_channels; i++) {
+		for (int j = 0; j < in_channels; j++) {
+			_init_params_he(&kernels[i][j], fan_in);
+			snprintf(&buffer[buffer_position], KERNEL_NAME_FORMAT_LENGTH, KERNEL_NAME_FORMAT, i, j);
+			_save_matrix(&kernels[i][j], buffer);
+		}
+	}
+}
+
+void _init_resnet_block(ResnetBlockParams* p, int height, int width, int in_channels, int out_channels, int time_embed_dim, char* buffer, int buffer_position) {
+	snprintf(&buffer[buffer_position], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 1);
+	_init_conv_kernels(p->conv_1_kernels, height, width, in_channels, out_channels, buffer, buffer_position + CONV_NAME_FORMAT_LENGTH);
+	snprintf(&buffer[buffer_position], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 2);
+	_init_conv_kernels(p->conv_2_kernels, height, width, out_channels, out_channels, buffer, buffer_position + CONV_NAME_FORMAT_LENGTH);
+	
+	_init_params_he(p->time_weights, time_embed_dim);
+	snprintf(&buffer[buffer_position], TIME_WEIGHT_FORMAT_LENGTH, "%s", TIME_WEIGHT_FORMAT);
+	_save_matrix(p->time_weights, buffer);
+	
+	for (int i = 0; i < p->time_biases->cols; i++) {
+		p->time_biases->data[i] = 0;
+	}
+	snprintf(&buffer[buffer_position], TIME_BIAS_FORMAT_LENGTH, "%s", TIME_BIAS_FORMAT);
+	_save_matrix(p->time_biases, buffer);
+
+	snprintf(&buffer[buffer_position], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 3);
+	_init_conv_kernels(p->residual_conv_kernels, height, width, in_channels, out_channels, buffer, buffer_position + CONV_NAME_FORMAT_LENGTH);
+}
+
+void _init_self_attention_block(SelfAttentionParams* p, int height, int width, int key_dim, char* buffer, int buffer_position) {
+	int fan_in = height * width;
+	
+	_init_params_xavier(p->Q_proj, fan_in, key_dim);
+	snprintf(&buffer[buffer_position], ATTENTION_QUERY_FORMAT_LENGTH, "%s", ATTENTION_QUERY_FORMAT);
+	_save_matrix(p->Q_proj, buffer);
+	
+	_init_params_xavier(p->K_proj, fan_in, key_dim);
+	snprintf(&buffer[buffer_position], ATTENTION_KEY_FORMAT_LENGTH, "%s", ATTENTION_KEY_FORMAT);
+	_save_matrix(p->K_proj, buffer);
+
+	_init_params_he(p->V_proj, fan_in);
+	snprintf(&buffer[buffer_position], ATTENTION_VALUE_FORMAT_LENGTH, "%s", ATTENTION_VALUE_FORMAT);
+	_save_matrix(p->V_proj, buffer);
+
+	_init_params_he(p->weights, key_dim);
+	snprintf(&buffer[buffer_position], ATTENTION_WEIGHT_FORMAT_LENGTH, "%s", ATTENTION_WEIGHT_FORMAT);
+	_save_matrix(p->weights, buffer);
+
+	for (int i = 0; i < p->biases->cols; i++) {
+		p->biases->data[i] = 0;
+	}
+	snprintf(&buffer[buffer_position], ATTENTION_BIAS_FORMAT_LENGTH, "%s", ATTENTION_BIAS_FORMAT);
+	_save_matrix(p->biases, buffer);
+}
+
 void init() {
 	ModelParams p;
 	ModelData d;
 
+	allocate_model_memory(&p, &d);
+
+	char filepath_name_buffer[255];
+	snprintf(filepath_name_buffer, DATA_PATH_LENGTH, "%s", DATA_PATH);
+	snprintf(filepath_name_buffer, DOWN_NAME_FORMAT_LENGTH, DOWN_NAME_FORMAT, 1);
+	_init_resnet_block(p.down_1_resnet_1, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 3, RESOLUTION_1_EMBED_DIM, TIME_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH);
 }
 
 void train(int num_epochs) {
@@ -550,12 +731,13 @@ void train(int num_epochs) {
 	data_fds[3] = open("data/cifar/data_batch_4.bin", O_RDONLY);
 	data_fds[4] = open("data/cifar/data_batch_5.bin", O_RDONLY);
 
-	Matrix x[3];
-	x[0] = (Matrix) { RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, malloc(RESOLUTION_1_HEIGHT * RESOLUTION_1_WIDTH * sizeof(matrix_float_t)) };
-	x[1] = (Matrix) { RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, malloc(RESOLUTION_1_HEIGHT * RESOLUTION_1_WIDTH * sizeof(matrix_float_t)) };
-	x[2] = (Matrix) { RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, malloc(RESOLUTION_1_HEIGHT * RESOLUTION_1_WIDTH * sizeof(matrix_float_t)) };
+	ModelParams p;
+	ModelData d;
+	allocate_model_memory(&p, &d);
 
-	load_example(x, data_fds[0]);
+	load_example(d.X, data_fds[0]);
+
+	forward(&p, &d);
 
 	for (int i = 0; i < 5; i++) {
 		close(data_fds[i]);

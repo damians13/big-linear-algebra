@@ -1,5 +1,6 @@
 #include "util.h"
 #include <math.h>
+#include <stdlib.h>
 
 void relu(matrix_float_t* data, int num) {
 	for (int i = 0; i < num; i++) {
@@ -34,4 +35,14 @@ void softmax(matrix_float_t* data, int rows, int cols) {
 			data[i + j * cols] /= sum_of_exponents;
 		}
 	}
+}
+
+void load_matrix_from_csv(Matrix* m, const char* filepath, int rows, int cols) {
+	float* csv_data = read_csv_contents(filepath);
+	for (int i = 0; i < rows * cols; i++) {
+		m->data[i] = (matrix_float_t) csv_data[i];
+	}
+	free(csv_data);
+	m->rows = rows;
+	m->cols = cols;
 }
