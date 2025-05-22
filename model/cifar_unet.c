@@ -54,16 +54,14 @@ const char* MID_NAME_FORMAT = "/mid";
 const int MID_NAME_FORMAT_LENGTH = 5;
 const char* UP_NAME_FORMAT = "/up_%d";
 const int UP_NAME_FORMAT_LENGTH = 6;
-const char* OUTPUT_NAME_FORMAT = "/output";
-const int OUTPUT_NAME_FORMAT_LENGTH = 8;
+const char* OUTPUT_NAME_FORMAT = "/output_conv.csv";
+const int OUTPUT_NAME_FORMAT_LENGTH = 17;
 const char* RESNET_NAME_FORMAT = "/resnet_%d";
 const int RESNET_NAME_FORMAT_LENGTH = 10;
-const char* CONV_NAME_FORMAT = "/conv_%d";
-const int CONV_NAME_FORMAT_LENGTH = 8;
+const char* CONV_NAME_FORMAT = "/conv_%d.csv";
+const int CONV_NAME_FORMAT_LENGTH = 12;
 const char* SELF_ATTENTION_NAME_FORMAT = "/self_attention_%d";
 const int SELF_ATTENTION_NAME_FORMAT_LENGTH = 18;
-const char* KERNEL_NAME_FORMAT = "/kernel_%04d_channel_%04d.csv";
-const int KERNEL_NAME_FORMAT_LENGTH = 30;
 const char* TIME_WEIGHT_FORMAT = "/time_weight.csv";
 const int TIME_WEIGHT_FORMAT_LENGTH = 17;
 const char* TIME_BIAS_FORMAT = "/time_bias.csv";
@@ -688,24 +686,30 @@ void _save_matrix(Matrix* m, char* filepath) {
 	free(buffer);
 }
 
-void _save_conv_kernels(Matrix** kernels, int height, int width, int in_channels, int out_channels, char* buffer, int buffer_position) {
-	int fan_in = height * width;
+void _save_conv_kernels(Matrix** kernels, int in_channels, int out_channels, char* filepath) {
+	int kernel_size = kernels[0][0].rows;
+	int kernel_area = kernel_size * kernel_size;
+	float* data_buffer = malloc(in_channels * out_channels * kernel_area * sizeof(float));
+
 	for (int i = 0; i < out_channels; i++) {
 		for (int j = 0; j < in_channels; j++) {
-			snprintf(&buffer[buffer_position], KERNEL_NAME_FORMAT_LENGTH, KERNEL_NAME_FORMAT, i, j);
-			_save_matrix(&kernels[i][j], buffer);
+			for (int k = 0; k < kernel_area; k++) {
+				data_buffer[i * in_channels * kernel_area + j * kernel_area + k] = (float) kernels[i][j].data[k];
+			}
 		}
 	}
+
+	write_csv_contents(filepath, data_buffer, kernel_area, in_channels * out_channels);
+
+	free(data_buffer);
 }
 
-void _save_resnet_block(ResnetBlockParams* p, int height, int width, int in_channels, int out_channels, char* buffer, int buffer_position) {
+void _save_resnet_block(ResnetBlockParams* p, int in_channels, int out_channels, char* buffer, int buffer_position) {
 	snprintf(&buffer[buffer_position], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 1);
-	mkdir(buffer, 0777);
-	_save_conv_kernels(p->conv_1_kernels, height, width, in_channels, out_channels, buffer, buffer_position + CONV_NAME_FORMAT_LENGTH - 1);
+	_save_conv_kernels(p->conv_1_kernels, in_channels, out_channels, buffer);
 	
 	snprintf(&buffer[buffer_position], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 2);
-	mkdir(buffer, 0777);
-	_save_conv_kernels(p->conv_2_kernels, height, width, out_channels, out_channels, buffer, buffer_position + CONV_NAME_FORMAT_LENGTH - 1);
+	_save_conv_kernels(p->conv_2_kernels, out_channels, out_channels, buffer);
 	
 	snprintf(&buffer[buffer_position], TIME_WEIGHT_FORMAT_LENGTH, "%s", TIME_WEIGHT_FORMAT);
 	_save_matrix(p->time_weights, buffer);
@@ -714,8 +718,7 @@ void _save_resnet_block(ResnetBlockParams* p, int height, int width, int in_chan
 	_save_matrix(p->time_biases, buffer);
 
 	snprintf(&buffer[buffer_position], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 3);
-	mkdir(buffer, 0777);
-	_save_conv_kernels(p->residual_conv_kernels, height, width, in_channels, out_channels, buffer, buffer_position + CONV_NAME_FORMAT_LENGTH - 1);
+	_save_conv_kernels(p->residual_conv_kernels, in_channels, out_channels, buffer);
 }
 
 void _save_self_attention_block(SelfAttentionParams* p, char* buffer, int buffer_position) {
@@ -744,119 +747,112 @@ void save_parameters(ModelParams* p) {
 	mkdir(filepath_name_buffer, 0777);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->down_1_resnet_1, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 3, RESOLUTION_1_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->down_1_resnet_1, 3, RESOLUTION_1_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->down_1_resnet_2, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 3, RESOLUTION_1_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->down_1_resnet_2, 3, RESOLUTION_1_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 0);
-	mkdir(filepath_name_buffer, 0777);
-	_save_conv_kernels(p->down_1_conv_kernels, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + CONV_NAME_FORMAT_LENGTH - 3);
+	_save_conv_kernels(p->down_1_conv_kernels, RESOLUTION_1_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer);
 
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH - 1], DOWN_NAME_FORMAT_LENGTH, DOWN_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->down_2_resnet_1, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->down_2_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], SELF_ATTENTION_NAME_FORMAT_LENGTH, SELF_ATTENTION_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
 	_save_self_attention_block(p->down_2_self_attention_1, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + SELF_ATTENTION_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->down_2_resnet_2, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->down_2_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], SELF_ATTENTION_NAME_FORMAT_LENGTH, SELF_ATTENTION_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
 	_save_self_attention_block(p->down_2_self_attention_2, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + SELF_ATTENTION_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 0);
-	mkdir(filepath_name_buffer, 0777);
-	_save_conv_kernels(p->down_2_conv_kernels, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + CONV_NAME_FORMAT_LENGTH - 3);
+	_save_conv_kernels(p->down_2_conv_kernels, RESOLUTION_2_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer);
 	
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH - 1], DOWN_NAME_FORMAT_LENGTH, DOWN_NAME_FORMAT, 3);
 	mkdir(filepath_name_buffer, 0777);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->down_3_resnet_1, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->down_3_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->down_3_resnet_2, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->down_3_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 0);
-	mkdir(filepath_name_buffer, 0777);
-	_save_conv_kernels(p->down_3_conv_kernels, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + CONV_NAME_FORMAT_LENGTH - 3);
+	_save_conv_kernels(p->down_3_conv_kernels, RESOLUTION_3_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer);
 	
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH - 1], DOWN_NAME_FORMAT_LENGTH, DOWN_NAME_FORMAT, 4);
 	mkdir(filepath_name_buffer, 0777);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->down_4_resnet_1, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->down_4_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->down_4_resnet_2, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->down_4_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + DOWN_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH - 1], MID_NAME_FORMAT_LENGTH, "%s", MID_NAME_FORMAT);
 	mkdir(filepath_name_buffer, 0777);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + MID_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->mid_resnet_1, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + MID_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->mid_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + MID_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + MID_NAME_FORMAT_LENGTH - 2], SELF_ATTENTION_NAME_FORMAT_LENGTH, SELF_ATTENTION_NAME_FORMAT, 0);
 	mkdir(filepath_name_buffer, 0777);
 	_save_self_attention_block(p->mid_self_attention, filepath_name_buffer, DATA_PATH_LENGTH + MID_NAME_FORMAT_LENGTH - 2);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + MID_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->mid_resnet_2, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + MID_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->mid_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + MID_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH - 1], UP_NAME_FORMAT_LENGTH, UP_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->up_1_resnet_1, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->up_1_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->up_1_resnet_2, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->up_1_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 0);
-	mkdir(filepath_name_buffer, 0777);
-	_save_conv_kernels(p->up_1_conv_kernels, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + CONV_NAME_FORMAT_LENGTH - 3);
+	_save_conv_kernels(p->up_1_conv_kernels, RESOLUTION_4_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer);
 	
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH - 1], UP_NAME_FORMAT_LENGTH, UP_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->up_2_resnet_1, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->up_2_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->up_2_resnet_2, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->up_2_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 0);
-	mkdir(filepath_name_buffer, 0777);
-	_save_conv_kernels(p->up_2_conv_kernels, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + CONV_NAME_FORMAT_LENGTH - 3);
+	_save_conv_kernels(p->up_2_conv_kernels, RESOLUTION_3_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer);
 	
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH - 1], UP_NAME_FORMAT_LENGTH, UP_NAME_FORMAT, 3);
 	mkdir(filepath_name_buffer, 0777);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->up_3_resnet_1, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->up_3_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], SELF_ATTENTION_NAME_FORMAT_LENGTH, SELF_ATTENTION_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
 	_save_self_attention_block(p->up_3_self_attention_1, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + SELF_ATTENTION_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->up_3_resnet_2, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->up_3_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], SELF_ATTENTION_NAME_FORMAT_LENGTH, SELF_ATTENTION_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
 	_save_self_attention_block(p->up_3_self_attention_2, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + SELF_ATTENTION_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], CONV_NAME_FORMAT_LENGTH, CONV_NAME_FORMAT, 0);
-	mkdir(filepath_name_buffer, 0777);
-	_save_conv_kernels(p->up_3_conv_kernels, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_1_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + CONV_NAME_FORMAT_LENGTH - 3);
+	_save_conv_kernels(p->up_3_conv_kernels, RESOLUTION_2_EMBED_DIM, RESOLUTION_1_EMBED_DIM, filepath_name_buffer);
 
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH - 1], UP_NAME_FORMAT_LENGTH, UP_NAME_FORMAT, 4);
 	mkdir(filepath_name_buffer, 0777);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 1);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->up_4_resnet_1, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->up_4_resnet_1, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH - 2], RESNET_NAME_FORMAT_LENGTH, RESNET_NAME_FORMAT, 2);
 	mkdir(filepath_name_buffer, 0777);
-	_save_resnet_block(p->up_4_resnet_2, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
+	_save_resnet_block(p->up_4_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, filepath_name_buffer, DATA_PATH_LENGTH + UP_NAME_FORMAT_LENGTH + RESNET_NAME_FORMAT_LENGTH - 3);
 
 	snprintf(&filepath_name_buffer[DATA_PATH_LENGTH - 1], OUTPUT_NAME_FORMAT_LENGTH, "%s", OUTPUT_NAME_FORMAT);
-	mkdir(filepath_name_buffer, 0777);
-	_save_conv_kernels(p->output_conv_kernels, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, 3, filepath_name_buffer, DATA_PATH_LENGTH + OUTPUT_NAME_FORMAT_LENGTH + CONV_NAME_FORMAT_LENGTH - 3);
+	_save_conv_kernels(p->output_conv_kernels, RESOLUTION_1_EMBED_DIM, 3, filepath_name_buffer);
 }
 
 void init() {
