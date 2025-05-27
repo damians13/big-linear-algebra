@@ -233,7 +233,7 @@ void multi_channel_relu(Matrix* X, int channels) {
 	}
 }
 
-void _allocate_conv_kernels_and_data(Matrix** kernels, ConvData* d, int in_height, int in_width, int stride, int kernel_size, int in_channels, int out_channels) {
+void _allocate_conv_kernels(Matrix** kernels, int kernel_size, int in_channels, int out_channels) {
 	for (int i = 0; i < out_channels; i++) {
 		kernels[i] = malloc(in_channels * sizeof(Matrix));
 		for (int j = 0; j < in_channels; j++) {
@@ -242,7 +242,9 @@ void _allocate_conv_kernels_and_data(Matrix** kernels, ConvData* d, int in_heigh
 			kernels[i][j].data = malloc(kernel_size * kernel_size * sizeof(matrix_float_t));
 		}
 	}
-	
+}
+
+void _allocate_conv_data(ConvData* d, int in_height, int in_width, int stride, int kernel_size, int in_channels, int out_channels) {
 	int out_height = (in_height + stride - 1) / stride;
 	int out_width = (in_width + stride - 1) / stride;
 	int num_convolutions = out_height * out_width;
@@ -270,12 +272,13 @@ void _allocate_conv_kernels_and_data(Matrix** kernels, ConvData* d, int in_heigh
 	}
 }
 
-void _allocate_resnet_block(ResnetBlockParams* p, ResnetBlockData* d, int embed_dim, int height, int width, int in_channels, int kernel_size, int time_embed_dim, int group_size) {
-	// Parameters
-	// Conv kernels allocated later (with the conv data)
+void _allocate_resnet_block_params(ResnetBlockParams* p, int embed_dim, int in_channels, int kernel_size, int time_embed_dim) {
 	p->conv_1_kernels = malloc(embed_dim * sizeof(Matrix*));
+	_allocate_conv_kernels(p->conv_1_kernels, kernel_size, in_channels, embed_dim);
 	p->conv_2_kernels = malloc(embed_dim * sizeof(Matrix*));
+	_allocate_conv_kernels(p->conv_2_kernels, kernel_size, embed_dim, embed_dim);
 	p->residual_conv_kernels = malloc(embed_dim * sizeof(Matrix*));
+	_allocate_conv_kernels(p->residual_conv_kernels, 1, embed_dim, embed_dim);
 
 	p->time_weights = malloc(sizeof(Matrix));
 	p->time_weights->rows = time_embed_dim;
@@ -286,8 +289,9 @@ void _allocate_resnet_block(ResnetBlockParams* p, ResnetBlockData* d, int embed_
 	p->time_biases->rows = 1;
 	p->time_biases->cols = embed_dim;
 	p->time_biases->data = malloc(embed_dim * sizeof(matrix_float_t));
+}
 
-	// Data
+void _allocate_resnet_block_data(ResnetBlockData* d, int embed_dim, int height, int width, int in_channels, int kernel_size, int group_size) {
 	int num_groups_1 = (in_channels + group_size - 1) / group_size; // Round up just in case
 	d->group_norm_means_1 = malloc(num_groups_1 * sizeof(matrix_float_t));
 	d->group_norm_stdevs_1 = malloc(num_groups_1 * sizeof(matrix_float_t));
@@ -299,12 +303,7 @@ void _allocate_resnet_block(ResnetBlockParams* p, ResnetBlockData* d, int embed_
 	}
 
 	d->conv_1 = malloc(sizeof(ConvData));
-	_allocate_conv_kernels_and_data(p->conv_1_kernels, d->conv_1, height, width, 1, kernel_size, in_channels, embed_dim);
-
-	// d->time_product = malloc(sizeof(Matrix));
-	// d->time_product->rows = time_embed_dim;
-	// d->time_product->cols = embed_dim;
-	// d->time_product->data = malloc(time_embed_dim * embed_dim * sizeof(matrix_float_t));
+	_allocate_conv_data(d->conv_1, height, width, 1, kernel_size, in_channels, embed_dim);
 
 	d->time_dense = malloc(sizeof(Matrix));
 	d->time_dense->rows = 1;
@@ -335,12 +334,11 @@ void _allocate_resnet_block(ResnetBlockParams* p, ResnetBlockData* d, int embed_
 
 	d->conv_2 = malloc(sizeof(ConvData));
 	d->residual_conv = malloc(sizeof(ConvData));
-	_allocate_conv_kernels_and_data(p->conv_2_kernels, d->conv_2, height, width, 1, kernel_size, embed_dim, embed_dim);
-	_allocate_conv_kernels_and_data(p->residual_conv_kernels, d->residual_conv, height, width, 1, 1, embed_dim, embed_dim);
+	_allocate_conv_data(d->conv_2, height, width, 1, kernel_size, embed_dim, embed_dim);
+	_allocate_conv_data(d->residual_conv, height, width, 1, 1, embed_dim, embed_dim);
 }
 
-void _allocate_self_attention_block(SelfAttentionParams* p, SelfAttentionData* d, int embed_dim, int key_dim, int height, int width) {
-	// Parameters
+void _allocate_self_attention_block_params(SelfAttentionParams* p, int embed_dim, int key_dim) {
 	p->Q_proj = malloc(sizeof(Matrix));
 	p->Q_proj->rows = embed_dim;
 	p->Q_proj->cols = key_dim;
@@ -365,8 +363,9 @@ void _allocate_self_attention_block(SelfAttentionParams* p, SelfAttentionData* d
 	p->biases->rows = 1;
 	p->biases->cols = embed_dim;
 	p->biases->data = malloc(embed_dim * sizeof(matrix_float_t));
+}
 
-	// Data
+void _allocate_self_attention_block_data(SelfAttentionData* d, int embed_dim, int key_dim, int height, int width) {
 	int spatial_dim = height * width;
 	d->input = malloc(sizeof(Matrix));
 	d->input->rows = spatial_dim;
@@ -416,7 +415,89 @@ void _allocate_self_attention_block(SelfAttentionParams* p, SelfAttentionData* d
 	}
 }
 
-void allocate_model_memory(ModelParams* p, ModelData* d) {
+void allocate_model_params(ModelParams *p) {
+	// First downsampling layer: resnet block x2, downsampling convolution
+	p->down_1_resnet_1 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->down_1_resnet_1, RESOLUTION_1_EMBED_DIM, 3, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->down_1_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->down_1_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->down_1_conv_kernels = malloc(RESOLUTION_2_EMBED_DIM * sizeof(Matrix*));
+	_allocate_conv_kernels(p->down_1_conv_kernels, KERNEL_SIZE, RESOLUTION_1_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+
+	// First downsampling layer: resnet block, self-attention block, resnet block, self-attention block, downsampling convolution
+	p->down_2_resnet_1 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->down_2_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->down_2_self_attention_1 = malloc(sizeof(SelfAttentionParams));
+	_allocate_self_attention_block_params(p->down_2_self_attention_1, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM);
+	p->down_2_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->down_2_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->down_2_self_attention_2 = malloc(sizeof(SelfAttentionParams));
+	_allocate_self_attention_block_params(p->down_2_self_attention_2, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM);
+	p->down_2_conv_kernels = malloc(RESOLUTION_3_EMBED_DIM * sizeof(Matrix*));
+	_allocate_conv_kernels(p->down_2_conv_kernels, KERNEL_SIZE, RESOLUTION_2_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+
+	// Third downsampling layer: resnet block x2 + downsampling convolution
+	p->down_3_resnet_1 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->down_3_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->down_3_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->down_3_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->down_3_conv_kernels = malloc(RESOLUTION_4_EMBED_DIM * sizeof(Matrix*));
+	_allocate_conv_kernels(p->down_3_conv_kernels, KERNEL_SIZE, RESOLUTION_3_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+
+	// Fourth downsampling layer: resnet block x2
+	p->down_4_resnet_1 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->down_4_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->down_4_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->down_4_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+
+	// Mid layer: resnet block, self-attention block, resnet block
+	p->mid_resnet_1 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->mid_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->mid_self_attention = malloc(sizeof(SelfAttentionParams));
+	_allocate_self_attention_block_params(p->mid_self_attention, RESOLUTION_4_EMBED_DIM, SELF_ATTENTION_KEY_DIM);
+	p->mid_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->mid_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+
+	// First upsampling layer: resnet block x2, nearest neighbours upscaling + a convolution
+	p->up_1_resnet_1 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->up_1_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->up_1_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->up_1_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->up_1_conv_kernels = malloc(RESOLUTION_3_EMBED_DIM * sizeof(Matrix*));
+	_allocate_conv_kernels(p->up_1_conv_kernels, KERNEL_SIZE, RESOLUTION_4_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+
+	// Second upsampling layer: resnet block x2, nearest neighbours upscaling + a convolution
+	p->up_2_resnet_1 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->up_2_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->up_2_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->up_2_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->up_2_conv_kernels = malloc(RESOLUTION_3_EMBED_DIM * sizeof(Matrix*));
+	_allocate_conv_kernels(p->up_2_conv_kernels, KERNEL_SIZE, RESOLUTION_3_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+
+	// Third upsampling layer: resnet block, self-attention block, resnet block, self-attention block, nearest neighbours upscaling + a convolution
+	p->up_3_resnet_1 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->up_3_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->up_3_self_attention_1 = malloc(sizeof(SelfAttentionParams));
+	_allocate_self_attention_block_params(p->up_3_self_attention_1, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM);
+	p->up_3_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->up_3_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->up_3_self_attention_2 = malloc(sizeof(SelfAttentionParams));
+	_allocate_self_attention_block_params(p->up_3_self_attention_2, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM);
+	p->up_3_conv_kernels = malloc(RESOLUTION_3_EMBED_DIM * sizeof(Matrix*));
+	_allocate_conv_kernels(p->up_3_conv_kernels, KERNEL_SIZE, RESOLUTION_2_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
+
+	// Fourth upsampling layer: resnet block x2
+	p->up_4_resnet_1 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->up_4_resnet_1, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+	p->up_4_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_params(p->up_4_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM);
+
+	// Output layer: group normalization, non-linearity, and a final convolution
+	p->output_conv_kernels = malloc(3 * sizeof(Matrix*));
+	_allocate_conv_kernels(p->output_conv_kernels, KERNEL_SIZE, RESOLUTION_1_EMBED_DIM, 3);
+}
+
+void allocate_model_data(ModelData* d) {
 	// Input data
 	d->X = malloc(3 * sizeof(Matrix));
 	for (int i = 0; i < 3; i++) {
@@ -430,127 +511,98 @@ void allocate_model_memory(ModelParams* p, ModelData* d) {
 	d->time_embedding->data = malloc(TIME_EMBED_DIM * sizeof(matrix_float_t));
 
 	// First downsampling layer: resnet block x2, downsampling convolution
-	p->down_1_resnet_1 = malloc(sizeof(ResnetBlockParams));
 	d->down_1_resnet_1 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->down_1_resnet_1, d->down_1_resnet_1, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 3, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->down_1_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_data(d->down_1_resnet_1, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 3, KERNEL_SIZE, GROUP_SIZE);
 	d->down_1_resnet_2 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->down_1_resnet_2, d->down_1_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->down_1_conv_kernels = malloc(RESOLUTION_2_EMBED_DIM * sizeof(Matrix*));
+	_allocate_resnet_block_data(d->down_1_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->down_1_conv = malloc(sizeof(ConvData));
-	_allocate_conv_kernels_and_data(p->down_1_conv_kernels, d->down_1_conv, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESIZE_STRIDE, KERNEL_SIZE, RESOLUTION_1_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	_allocate_conv_data(d->down_1_conv, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESIZE_STRIDE, KERNEL_SIZE, RESOLUTION_1_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
 
 	// First downsampling layer: resnet block, self-attention block, resnet block, self-attention block, downsampling convolution
-	p->down_2_resnet_1 = malloc(sizeof(ResnetBlockParams));
 	d->down_2_resnet_1 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->down_2_resnet_1, d->down_2_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->down_2_self_attention_1 = malloc(sizeof(SelfAttentionParams));
+	_allocate_resnet_block_data(d->down_2_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->down_2_self_attention_1 = malloc(sizeof(SelfAttentionData));
-	_allocate_self_attention_block(p->down_2_self_attention_1, d->down_2_self_attention_1, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH);
-	p->down_2_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_self_attention_block_data(d->down_2_self_attention_1, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH);
 	d->down_2_resnet_2 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->down_2_resnet_2, d->down_2_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->down_2_self_attention_2 = malloc(sizeof(SelfAttentionParams));
+	_allocate_resnet_block_data(d->down_2_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->down_2_self_attention_2 = malloc(sizeof(SelfAttentionData));
-	_allocate_self_attention_block(p->down_2_self_attention_2, d->down_2_self_attention_2, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH);
-	p->down_2_conv_kernels = malloc(RESOLUTION_3_EMBED_DIM * sizeof(Matrix*));
+	_allocate_self_attention_block_data(d->down_2_self_attention_2, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH);
 	d->down_2_conv = malloc(sizeof(ConvData));
-	_allocate_conv_kernels_and_data(p->down_2_conv_kernels, d->down_2_conv, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESIZE_STRIDE, KERNEL_SIZE, RESOLUTION_2_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	_allocate_conv_data(d->down_2_conv, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESIZE_STRIDE, KERNEL_SIZE, RESOLUTION_2_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
 
 	// Third downsampling layer: resnet block x2 + downsampling convolution
-	p->down_3_resnet_1 = malloc(sizeof(ResnetBlockParams));
 	d->down_3_resnet_1 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->down_3_resnet_1, d->down_3_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->down_3_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_data(d->down_3_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->down_3_resnet_2 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->down_3_resnet_2, d->down_3_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->down_3_conv_kernels = malloc(RESOLUTION_4_EMBED_DIM * sizeof(Matrix*));
+	_allocate_resnet_block_data(d->down_3_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->down_3_conv = malloc(sizeof(ConvData));
-	_allocate_conv_kernels_and_data(p->down_3_conv_kernels, d->down_3_conv, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESIZE_STRIDE, KERNEL_SIZE, RESOLUTION_3_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	_allocate_conv_data(d->down_3_conv, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESIZE_STRIDE, KERNEL_SIZE, RESOLUTION_3_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
 
 	// Fourth downsampling layer: resnet block x2
-	p->down_4_resnet_1 = malloc(sizeof(ResnetBlockParams));
 	d->down_4_resnet_1 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->down_4_resnet_1, d->down_4_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->down_4_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_data(d->down_4_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->down_4_resnet_2 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->down_4_resnet_2, d->down_4_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
+	_allocate_resnet_block_data(d->down_4_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 
 	// Mid layer: resnet block, self-attention block, resnet block
-	p->mid_resnet_1 = malloc(sizeof(ResnetBlockParams));
 	d->mid_resnet_1 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->mid_resnet_1, d->mid_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->mid_self_attention = malloc(sizeof(SelfAttentionParams));
+	_allocate_resnet_block_data(d->mid_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->mid_self_attention = malloc(sizeof(SelfAttentionData));
-	_allocate_self_attention_block(p->mid_self_attention, d->mid_self_attention, RESOLUTION_4_EMBED_DIM, SELF_ATTENTION_KEY_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH);
-	p->mid_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_self_attention_block_data(d->mid_self_attention, RESOLUTION_4_EMBED_DIM, SELF_ATTENTION_KEY_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH);
 	d->mid_resnet_2 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->mid_resnet_2, d->mid_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
+	_allocate_resnet_block_data(d->mid_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 
 	// First upsampling layer: resnet block x2, nearest neighbours upscaling + a convolution
-	p->up_1_resnet_1 = malloc(sizeof(ResnetBlockParams));
 	d->up_1_resnet_1 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->up_1_resnet_1, d->up_1_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->up_1_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_data(d->up_1_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->up_1_resnet_2 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->up_1_resnet_2, d->up_1_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
+	_allocate_resnet_block_data(d->up_1_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->up_1_nearest_neighbours = malloc(RESOLUTION_4_EMBED_DIM * sizeof(Matrix));
 	for (int i = 0; i < RESOLUTION_4_EMBED_DIM; i++) {
 		d->up_1_nearest_neighbours[i].rows = RESOLUTION_3_HEIGHT;
 		d->up_1_nearest_neighbours[i].cols = RESOLUTION_3_WIDTH;
 		d->up_1_nearest_neighbours[i].data = malloc(RESOLUTION_3_HEIGHT * RESOLUTION_3_WIDTH * sizeof(matrix_float_t));
 	}
-	p->up_1_conv_kernels = malloc(RESOLUTION_3_EMBED_DIM * sizeof(Matrix*));
 	d->up_1_conv = malloc(sizeof(ConvData));
-	_allocate_conv_kernels_and_data(p->up_1_conv_kernels, d->up_1_conv, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, 1, KERNEL_SIZE, RESOLUTION_4_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	_allocate_conv_data(d->up_1_conv, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, 1, KERNEL_SIZE, RESOLUTION_4_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
 
 	// Second upsampling layer: resnet block x2, nearest neighbours upscaling + a convolution
-	p->up_2_resnet_1 = malloc(sizeof(ResnetBlockParams));
 	d->up_2_resnet_1 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->up_2_resnet_1, d->up_2_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->up_2_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_data(d->up_2_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->up_2_resnet_2 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->up_2_resnet_2, d->up_2_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
+	_allocate_resnet_block_data(d->up_2_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->up_2_nearest_neighbours = malloc(RESOLUTION_3_EMBED_DIM * sizeof(Matrix));
 	for (int i = 0; i < RESOLUTION_3_EMBED_DIM; i++) {
 		d->up_2_nearest_neighbours[i].rows = RESOLUTION_2_HEIGHT;
 		d->up_2_nearest_neighbours[i].cols = RESOLUTION_2_WIDTH;
 		d->up_2_nearest_neighbours[i].data = malloc(RESOLUTION_2_HEIGHT * RESOLUTION_2_WIDTH * sizeof(matrix_float_t));
 	}
-	p->up_2_conv_kernels = malloc(RESOLUTION_3_EMBED_DIM * sizeof(Matrix*));
 	d->up_2_conv = malloc(sizeof(ConvData));
-	_allocate_conv_kernels_and_data(p->up_2_conv_kernels, d->up_2_conv, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, 1, KERNEL_SIZE, RESOLUTION_3_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	_allocate_conv_data(d->up_2_conv, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, 1, KERNEL_SIZE, RESOLUTION_3_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
 
 	// Third upsampling layer: resnet block, self-attention block, resnet block, self-attention block, nearest neighbours upscaling + a convolution
-	p->up_3_resnet_1 = malloc(sizeof(ResnetBlockParams));
 	d->up_3_resnet_1 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->up_3_resnet_1, d->up_3_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->up_3_self_attention_1 = malloc(sizeof(SelfAttentionParams));
+	_allocate_resnet_block_data(d->up_3_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->up_3_self_attention_1 = malloc(sizeof(SelfAttentionData));
-	_allocate_self_attention_block(p->up_3_self_attention_1, d->up_3_self_attention_1, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH);
-	p->up_3_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_self_attention_block_data(d->up_3_self_attention_1, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH);
 	d->up_3_resnet_2 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->up_3_resnet_2, d->up_3_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->up_3_self_attention_2 = malloc(sizeof(SelfAttentionParams));
+	_allocate_resnet_block_data(d->up_3_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->up_3_self_attention_2 = malloc(sizeof(SelfAttentionData));
-	_allocate_self_attention_block(p->up_3_self_attention_2, d->up_3_self_attention_2, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH);
+	_allocate_self_attention_block_data(d->up_3_self_attention_2, RESOLUTION_2_EMBED_DIM, SELF_ATTENTION_KEY_DIM, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH);
 	d->up_3_nearest_neighbours = malloc(RESOLUTION_2_EMBED_DIM * sizeof(Matrix));
 	for (int i = 0; i < RESOLUTION_2_EMBED_DIM; i++) {
 		d->up_3_nearest_neighbours[i].rows = RESOLUTION_1_HEIGHT;
 		d->up_3_nearest_neighbours[i].cols = RESOLUTION_1_WIDTH;
 		d->up_3_nearest_neighbours[i].data = malloc(RESOLUTION_1_HEIGHT * RESOLUTION_1_WIDTH * sizeof(matrix_float_t));
 	}
-	p->up_3_conv_kernels = malloc(RESOLUTION_3_EMBED_DIM * sizeof(Matrix*));
 	d->up_3_conv = malloc(sizeof(ConvData));
-	_allocate_conv_kernels_and_data(p->up_3_conv_kernels, d->up_3_conv, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 1, KERNEL_SIZE, RESOLUTION_2_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
+	_allocate_conv_data(d->up_3_conv, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 1, KERNEL_SIZE, RESOLUTION_2_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
 
 	// Fourth upsampling layer: resnet block x2
-	p->up_4_resnet_1 = malloc(sizeof(ResnetBlockParams));
 	d->up_4_resnet_1 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->up_4_resnet_1, d->up_4_resnet_1, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
-	p->up_4_resnet_2 = malloc(sizeof(ResnetBlockParams));
+	_allocate_resnet_block_data(d->up_4_resnet_1, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 	d->up_4_resnet_2 = malloc(sizeof(ResnetBlockData));
-	_allocate_resnet_block(p->up_4_resnet_2, d->up_4_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, KERNEL_SIZE, TIME_EMBED_DIM, GROUP_SIZE);
+	_allocate_resnet_block_data(d->up_4_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, KERNEL_SIZE, GROUP_SIZE);
 
 	// Output layer: group normalization, non-linearity, and a final convolution
 	int num_output_groups = (RESOLUTION_1_EMBED_DIM + GROUP_SIZE - 1) / GROUP_SIZE;
@@ -562,9 +614,8 @@ void allocate_model_memory(ModelParams* p, ModelData* d) {
 		d->output_relu[i].cols = RESOLUTION_1_WIDTH;
 		d->output_relu[i].data = malloc(RESOLUTION_1_HEIGHT * RESOLUTION_1_WIDTH * sizeof(matrix_float_t));
 	}
-	p->output_conv_kernels = malloc(3 * sizeof(Matrix*));
 	d->output_conv = malloc(sizeof(ConvData));
-	_allocate_conv_kernels_and_data(p->output_conv_kernels, d->output_conv, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 1, KERNEL_SIZE, RESOLUTION_1_EMBED_DIM, 3);
+	_allocate_conv_data(d->output_conv, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 1, KERNEL_SIZE, RESOLUTION_1_EMBED_DIM, 3);
 }
 
 void _forward_attention(Matrix* X, SelfAttentionParams* params, SelfAttentionData* data) {
@@ -1122,7 +1173,8 @@ void init() {
 	ModelParams p;
 	ModelData d;
 
-	allocate_model_memory(&p, &d);
+	allocate_model_params(&p);
+	allocate_model_data(&d);
 
 	init_parameters(&p);
 
@@ -1141,7 +1193,15 @@ void train(int num_epochs) {
 
 	ModelParams p;
 	ModelData d;
-	allocate_model_memory(&p, &d);
+	ModelParams g; // Gradient
+	ModelParams gm; // Gradient moment
+	ModelParams gsm; // Gradient squared moment
+
+	allocate_model_params(&p);
+	allocate_model_data(&d);
+	allocate_model_params(&g);
+	allocate_model_params(&gm);
+	allocate_model_params(&gsm);
 
 	// Speed up testing by avoiding file system operations
 	// load_parameters(&p);
