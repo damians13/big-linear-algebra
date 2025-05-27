@@ -250,23 +250,23 @@ void _allocate_conv_kernels_and_data(Matrix** kernels, ConvData* d, int in_heigh
 	d->im2col = malloc(sizeof(Matrix));
 	d->im2col->rows = num_convolutions;
 	d->im2col->cols = conv_dim;
-	d->im2col->data = malloc(num_convolutions * conv_dim);
+	d->im2col->data = malloc(num_convolutions * conv_dim * sizeof(matrix_float_t));
 
 	d->kernel_matrix = malloc(sizeof(Matrix));
 	d->kernel_matrix->rows = conv_dim;
 	d->kernel_matrix->cols = out_channels;
-	d->kernel_matrix->data = malloc(conv_dim * out_channels);
+	d->kernel_matrix->data = malloc(conv_dim * out_channels * sizeof(matrix_float_t));
 
 	d->product = malloc(sizeof(Matrix));
 	d->product->rows = num_convolutions;
 	d->product->cols = out_channels;
-	d->product->data = malloc(num_convolutions * out_channels);
+	d->product->data = malloc(num_convolutions * out_channels * sizeof(matrix_float_t));
 
 	d->output = malloc(out_channels * sizeof(Matrix));
 	for (int i = 0; i < out_channels; i++) {
 		d->output[i].rows = out_height;
 		d->output[i].cols = out_width;
-		d->output[i].data = malloc(out_height * out_width);
+		d->output[i].data = malloc(out_height * out_width * sizeof(matrix_float_t));
 	}
 }
 
@@ -418,10 +418,12 @@ void _allocate_self_attention_block(SelfAttentionParams* p, SelfAttentionData* d
 
 void allocate_model_memory(ModelParams* p, ModelData* d) {
 	// Input data
-	d->X = malloc(sizeof(Matrix));
-	d->X->rows = RESOLUTION_1_HEIGHT;
-	d->X->cols = RESOLUTION_1_WIDTH;
-	d->X->data = malloc(RESOLUTION_1_HEIGHT * RESOLUTION_1_WIDTH * sizeof(matrix_float_t));
+	d->X = malloc(3 * sizeof(Matrix));
+	for (int i = 0; i < 3; i++) {
+		d->X[i].rows = RESOLUTION_1_HEIGHT;
+		d->X[i].cols = RESOLUTION_1_WIDTH;
+		d->X[i].data = malloc(RESOLUTION_1_HEIGHT * RESOLUTION_1_WIDTH * sizeof(matrix_float_t));
+	}
 	d->time_embedding = malloc(sizeof(Matrix));
 	d->time_embedding->rows = 1;
 	d->time_embedding->cols = TIME_EMBED_DIM;
@@ -554,10 +556,12 @@ void allocate_model_memory(ModelParams* p, ModelData* d) {
 	int num_output_groups = (RESOLUTION_1_EMBED_DIM + GROUP_SIZE - 1) / GROUP_SIZE;
 	d->output_group_norm_means = malloc(num_output_groups * sizeof(matrix_float_t));
 	d->output_group_norm_stdevs = malloc(num_output_groups * sizeof(matrix_float_t));
-	d->output_relu = malloc(sizeof(Matrix));
-	d->output_relu->rows = RESOLUTION_1_HEIGHT;
-	d->output_relu->cols = RESOLUTION_1_WIDTH;
-	d->output_relu->data = malloc(RESOLUTION_1_HEIGHT * RESOLUTION_1_WIDTH * sizeof(matrix_float_t));
+	d->output_relu = malloc(RESOLUTION_1_EMBED_DIM * sizeof(Matrix));
+	for (int i = 0; i < RESOLUTION_1_EMBED_DIM; i++) {
+		d->output_relu[i].rows = RESOLUTION_1_HEIGHT;
+		d->output_relu[i].cols = RESOLUTION_1_WIDTH;
+		d->output_relu[i].data = malloc(RESOLUTION_1_HEIGHT * RESOLUTION_1_WIDTH * sizeof(matrix_float_t));
+	}
 	p->output_conv_kernels = malloc(3 * sizeof(Matrix*));
 	d->output_conv = malloc(sizeof(ConvData));
 	_allocate_conv_kernels_and_data(p->output_conv_kernels, d->output_conv, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 1, KERNEL_SIZE, RESOLUTION_1_EMBED_DIM, 3);
@@ -579,7 +583,7 @@ void _forward_attention(Matrix* X, SelfAttentionParams* params, SelfAttentionDat
 
 void _add_time_embedding(Matrix* X, Matrix* time_embedding, int channels) {
 	for (int c = 0; c < channels; c++) {
-		for (int i = 0; i < X[i].rows * X[i].cols; i++) {
+		for (int i = 0; i < X[c].rows * X[c].cols; i++) {
 			X[c].data[i] += time_embedding->data[c];
 		}
 	}
@@ -627,8 +631,83 @@ void _forward_resnet(Matrix* X, Matrix* time_emb, ResnetBlockParams* p, ResnetBl
 	}
 }
 
-void forward(ModelParams* p, ModelData* d) {
+void _nearest_neighbours(Matrix* in, Matrix* out, int channels, int scale) {
+	int in_width = in[0].cols;
+	int out_height = out[0].rows;
+	int out_width = out[0].cols;
 
+	for (int c = 0; c < channels; c++) {
+		for (int i = 0; i < out_height; i++) {
+			for (int j = 0; j < out_width; j++) {
+				out[c].data[i * out_width + j] = in[c].data[(i / scale) * in_width + j / scale];
+			}
+		}
+	}
+}
+
+void forward(ModelParams* p, ModelData* d) {
+	Matrix* next;
+
+	// Down
+	_forward_resnet(d->X, d->time_embedding, p->down_1_resnet_1, d->down_1_resnet_1, 3, RESOLUTION_1_EMBED_DIM, GROUP_SIZE);
+	_forward_resnet(d->down_1_resnet_1->result, d->time_embedding, p->down_1_resnet_2, d->down_1_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, GROUP_SIZE);
+	conv(d->down_1_resnet_2->result, p->down_1_conv_kernels, d->down_1_conv, RESOLUTION_1_EMBED_DIM, RESOLUTION_2_EMBED_DIM, RESIZE_STRIDE);
+
+	_forward_resnet(d->down_1_conv->output, d->time_embedding, p->down_2_resnet_1, d->down_2_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, GROUP_SIZE);
+	_forward_attention(d->down_2_resnet_1->result, p->down_2_self_attention_1, d->down_2_self_attention_1);
+	_forward_resnet(d->down_2_self_attention_1->output, d->time_embedding, p->down_2_resnet_2, d->down_2_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, GROUP_SIZE);
+	_forward_attention(d->down_2_resnet_2->result, p->down_2_self_attention_2, d->down_2_self_attention_2);
+	conv(d->down_2_self_attention_2->output, p->down_2_conv_kernels, d->down_2_conv, RESOLUTION_2_EMBED_DIM, RESOLUTION_3_EMBED_DIM, RESIZE_STRIDE);
+
+	_forward_resnet(d->down_2_conv->output, d->time_embedding, p->down_3_resnet_1, d->down_3_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, GROUP_SIZE);
+	_forward_resnet(d->down_3_resnet_1->result, d->time_embedding, p->down_3_resnet_2, d->down_3_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, GROUP_SIZE);
+	conv(d->down_3_resnet_2->result, p->down_3_conv_kernels, d->down_3_conv, RESOLUTION_3_EMBED_DIM, RESOLUTION_4_EMBED_DIM, RESIZE_STRIDE);
+
+	_forward_resnet(d->down_3_conv->output, d->time_embedding, p->down_4_resnet_1, d->down_4_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, GROUP_SIZE);
+	_forward_resnet(d->down_4_resnet_1->result, d->time_embedding, p->down_4_resnet_2, d->down_4_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, GROUP_SIZE);
+
+	// Mid
+	_forward_resnet(d->down_4_resnet_2->result, d->time_embedding, p->mid_resnet_1, d->mid_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, GROUP_SIZE);
+	_forward_attention(d->mid_resnet_1->result, p->mid_self_attention, d->mid_self_attention);
+	_forward_resnet(d->mid_self_attention->output, d->time_embedding, p->mid_resnet_2, d->mid_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, GROUP_SIZE);
+
+	// Up
+	_forward_resnet(d->mid_resnet_2->result, d->time_embedding, p->up_1_resnet_1, d->up_1_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, GROUP_SIZE);
+	_forward_resnet(d->up_1_resnet_1->result, d->time_embedding, p->up_1_resnet_2, d->up_1_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, GROUP_SIZE);
+	_nearest_neighbours(d->up_1_resnet_2->result, d->up_1_nearest_neighbours, RESOLUTION_4_EMBED_DIM, RESIZE_STRIDE);
+	next = d->up_1_nearest_neighbours;
+	if (RESOLUTION_4_EMBED_DIM != RESOLUTION_3_EMBED_DIM) {
+		conv(d->up_1_nearest_neighbours, p->up_1_conv_kernels, d->up_1_conv, RESOLUTION_4_EMBED_DIM, RESOLUTION_3_EMBED_DIM, 1);
+		next = d->up_1_conv->output;
+	}
+	
+	_forward_resnet(next, d->time_embedding, p->up_2_resnet_1, d->up_2_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, GROUP_SIZE);
+	_forward_resnet(d->up_2_resnet_1->result, d->time_embedding, p->up_2_resnet_2, d->up_2_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, GROUP_SIZE);
+	_nearest_neighbours(d->up_2_resnet_2->result, d->up_2_nearest_neighbours, RESOLUTION_3_EMBED_DIM, RESIZE_STRIDE);
+	next = d->up_2_nearest_neighbours;
+	if (RESOLUTION_3_EMBED_DIM != RESOLUTION_2_EMBED_DIM) {
+		conv(d->up_2_nearest_neighbours, p->up_2_conv_kernels, d->up_2_conv, RESOLUTION_3_EMBED_DIM, RESOLUTION_2_EMBED_DIM, 1);
+		next = d->up_2_conv->output;
+	}
+	
+	_forward_resnet(next, d->time_embedding, p->up_3_resnet_1, d->up_3_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, GROUP_SIZE);
+	_forward_attention(d->up_3_resnet_1->result, p->up_3_self_attention_1, d->up_3_self_attention_1);
+	_forward_resnet(d->up_3_self_attention_1->output, d->time_embedding, p->up_3_resnet_2, d->up_3_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, GROUP_SIZE);
+	_forward_attention(d->up_3_resnet_2->result, p->up_3_self_attention_1, d->up_3_self_attention_1);
+	_nearest_neighbours(d->up_3_self_attention_2->output, d->up_3_nearest_neighbours, RESOLUTION_2_EMBED_DIM, RESIZE_STRIDE);
+	next = d->up_3_nearest_neighbours;
+	if (RESOLUTION_2_EMBED_DIM != RESOLUTION_1_EMBED_DIM) {
+		conv(d->up_3_nearest_neighbours, p->up_3_conv_kernels, d->up_3_conv, RESOLUTION_2_EMBED_DIM, RESOLUTION_1_EMBED_DIM, 1);
+		next = d->up_3_conv->output;
+	}
+	
+	_forward_resnet(next, d->time_embedding, p->up_4_resnet_1, d->up_4_resnet_1, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, GROUP_SIZE);
+	_forward_resnet(d->up_4_resnet_1->result, d->time_embedding, p->up_4_resnet_2, d->up_4_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, GROUP_SIZE);
+
+	// Output
+	group_norm(d->up_4_resnet_2->result, d->output_relu, d->output_group_norm_stdevs, d->output_group_norm_means, RESOLUTION_1_EMBED_DIM, GROUP_SIZE);
+	multi_channel_relu(d->output_relu, RESOLUTION_1_EMBED_DIM);
+	conv(d->output_relu, p->output_conv_kernels, d->output_conv, RESOLUTION_1_EMBED_DIM, 3, 1);
 }
 
 // For parameters with ReLU non-linearity
@@ -997,56 +1076,62 @@ void load_parameters(ModelParams* p) {
 	_load_conv_kernels(p->output_conv_kernels, RESOLUTION_1_EMBED_DIM, 3, filepath_name_buffer);
 }
 
+void init_parameters(ModelParams* p) {
+	_init_resnet_block(p->down_1_resnet_1, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 3, RESOLUTION_1_EMBED_DIM, TIME_EMBED_DIM);
+	_init_resnet_block(p->down_1_resnet_2, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, TIME_EMBED_DIM);
+	_init_conv_kernels(p->down_1_conv_kernels, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	
+	_init_resnet_block(p->down_2_resnet_1, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, TIME_EMBED_DIM);
+	_init_self_attention_block(p->down_2_self_attention_1, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, SELF_ATTENTION_KEY_DIM);
+	_init_resnet_block(p->down_2_resnet_2, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, TIME_EMBED_DIM);
+	_init_self_attention_block(p->down_2_self_attention_2, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, SELF_ATTENTION_KEY_DIM);
+	_init_conv_kernels(p->down_2_conv_kernels, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	
+	_init_resnet_block(p->down_3_resnet_1, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, TIME_EMBED_DIM);
+	_init_resnet_block(p->down_3_resnet_2, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, TIME_EMBED_DIM);
+	_init_conv_kernels(p->down_3_conv_kernels, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	
+	_init_resnet_block(p->down_4_resnet_1, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
+	_init_resnet_block(p->down_4_resnet_2, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
+
+	_init_resnet_block(p->mid_resnet_1, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
+	_init_self_attention_block(p->mid_self_attention, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, SELF_ATTENTION_KEY_DIM);
+	_init_resnet_block(p->mid_resnet_2, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
+	
+	_init_resnet_block(p->up_1_resnet_1, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
+	_init_resnet_block(p->up_1_resnet_2, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
+	_init_conv_kernels(p->up_1_conv_kernels, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	
+	_init_resnet_block(p->up_2_resnet_1, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, TIME_EMBED_DIM);
+	_init_resnet_block(p->up_2_resnet_2, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, TIME_EMBED_DIM);
+	_init_conv_kernels(p->up_2_conv_kernels, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	
+	_init_resnet_block(p->up_3_resnet_1, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, TIME_EMBED_DIM);
+	_init_self_attention_block(p->up_3_self_attention_1, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, SELF_ATTENTION_KEY_DIM);
+	_init_resnet_block(p->up_3_resnet_2, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, TIME_EMBED_DIM);
+	_init_self_attention_block(p->up_3_self_attention_2, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, SELF_ATTENTION_KEY_DIM);
+	_init_conv_kernels(p->up_3_conv_kernels, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
+
+	_init_resnet_block(p->up_4_resnet_1, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, TIME_EMBED_DIM);
+	_init_resnet_block(p->up_4_resnet_2, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, TIME_EMBED_DIM);
+
+	_init_conv_kernels(p->output_conv_kernels, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, 3);
+}
+
 void init() {
 	ModelParams p;
 	ModelData d;
 
 	allocate_model_memory(&p, &d);
-	
-	_init_resnet_block(p.down_1_resnet_1, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 3, RESOLUTION_1_EMBED_DIM, TIME_EMBED_DIM);
-	_init_resnet_block(p.down_1_resnet_2, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, TIME_EMBED_DIM);
-	_init_conv_kernels(p.down_1_conv_kernels, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
-	
-	_init_resnet_block(p.down_2_resnet_1, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, TIME_EMBED_DIM);
-	_init_self_attention_block(p.down_2_self_attention_1, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, SELF_ATTENTION_KEY_DIM);
-	_init_resnet_block(p.down_2_resnet_2, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, TIME_EMBED_DIM);
-	_init_self_attention_block(p.down_2_self_attention_2, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, SELF_ATTENTION_KEY_DIM);
-	_init_conv_kernels(p.down_2_conv_kernels, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
-	
-	_init_resnet_block(p.down_3_resnet_1, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, TIME_EMBED_DIM);
-	_init_resnet_block(p.down_3_resnet_2, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, TIME_EMBED_DIM);
-	_init_conv_kernels(p.down_3_conv_kernels, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
-	
-	_init_resnet_block(p.down_4_resnet_1, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
-	_init_resnet_block(p.down_4_resnet_2, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
 
-	_init_resnet_block(p.mid_resnet_1, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
-	_init_self_attention_block(p.mid_self_attention, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, SELF_ATTENTION_KEY_DIM);
-	_init_resnet_block(p.mid_resnet_2, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
-	
-	_init_resnet_block(p.up_1_resnet_1, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
-	_init_resnet_block(p.up_1_resnet_2, RESOLUTION_4_HEIGHT, RESOLUTION_4_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM, TIME_EMBED_DIM);
-	_init_conv_kernels(p.up_1_conv_kernels, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_4_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
-	
-	_init_resnet_block(p.up_2_resnet_1, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, TIME_EMBED_DIM);
-	_init_resnet_block(p.up_2_resnet_2, RESOLUTION_3_HEIGHT, RESOLUTION_3_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, TIME_EMBED_DIM);
-	_init_conv_kernels(p.up_2_conv_kernels, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_3_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
-	
-	_init_resnet_block(p.up_3_resnet_1, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, TIME_EMBED_DIM);
-	_init_self_attention_block(p.up_3_self_attention_1, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, SELF_ATTENTION_KEY_DIM);
-	_init_resnet_block(p.up_3_resnet_2, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, TIME_EMBED_DIM);
-	_init_self_attention_block(p.up_3_self_attention_2, RESOLUTION_2_HEIGHT, RESOLUTION_2_WIDTH, SELF_ATTENTION_KEY_DIM);
-	_init_conv_kernels(p.up_3_conv_kernels, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_2_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
-
-	_init_resnet_block(p.up_4_resnet_1, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, TIME_EMBED_DIM);
-	_init_resnet_block(p.up_4_resnet_2, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, TIME_EMBED_DIM);
-
-	_init_conv_kernels(p.output_conv_kernels, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, RESOLUTION_1_EMBED_DIM, 3);
+	init_parameters(&p);
 
 	save_parameters(&p);
 }
 
 void train(int num_epochs) {
+	(void) num_epochs;
+
 	int data_fds[5];
 	data_fds[0] = open("data/cifar/data_batch_1.bin", O_RDONLY);
 	data_fds[1] = open("data/cifar/data_batch_2.bin", O_RDONLY);
@@ -1058,20 +1143,26 @@ void train(int num_epochs) {
 	ModelData d;
 	allocate_model_memory(&p, &d);
 
-	load_parameters(&p);
+	// Speed up testing by avoiding file system operations
+	// load_parameters(&p);
+	init_parameters(&p);
 
-	printf("Hi!\n");
+	load_example(d.X, data_fds[0]);
 
-	// load_example(d.X, data_fds[0]);
+	forward(&p, &d);
 
-	// forward(&p, &d);
+	for (int i = 0; i < 3; i++) {
+		print_matrix(*d.output_conv->output);
+	}
 
 	for (int i = 0; i < 5; i++) {
 		close(data_fds[i]);
 	}
 }
 
-void run(int num_predictions) {}
+void run(int num_predictions) {
+	(void) num_predictions;
+}
 
 int main(int argc, char** argv) {
 	srand(42);
