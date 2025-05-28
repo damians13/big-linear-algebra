@@ -278,7 +278,7 @@ void _allocate_resnet_block_params(ResnetBlockParams* p, int embed_dim, int in_c
 	p->conv_2_kernels = malloc(embed_dim * sizeof(Matrix*));
 	_allocate_conv_kernels(p->conv_2_kernels, kernel_size, embed_dim, embed_dim);
 	p->residual_conv_kernels = malloc(embed_dim * sizeof(Matrix*));
-	_allocate_conv_kernels(p->residual_conv_kernels, 1, embed_dim, embed_dim);
+	_allocate_conv_kernels(p->residual_conv_kernels, 1, in_channels, embed_dim);
 
 	p->time_weights = malloc(sizeof(Matrix));
 	p->time_weights->rows = time_embed_dim;
@@ -335,7 +335,7 @@ void _allocate_resnet_block_data(ResnetBlockData* d, int embed_dim, int height, 
 	d->conv_2 = malloc(sizeof(ConvData));
 	d->residual_conv = malloc(sizeof(ConvData));
 	_allocate_conv_data(d->conv_2, height, width, 1, kernel_size, embed_dim, embed_dim);
-	_allocate_conv_data(d->residual_conv, height, width, 1, 1, embed_dim, embed_dim);
+	_allocate_conv_data(d->residual_conv, height, width, 1, 1, in_channels, embed_dim);
 }
 
 void _allocate_self_attention_block_params(SelfAttentionParams* p, int embed_dim, int key_dim) {
@@ -616,6 +616,317 @@ void allocate_model_data(ModelData* d) {
 	}
 	d->output_conv = malloc(sizeof(ConvData));
 	_allocate_conv_data(d->output_conv, RESOLUTION_1_HEIGHT, RESOLUTION_1_WIDTH, 1, KERNEL_SIZE, RESOLUTION_1_EMBED_DIM, 3);
+}
+
+void _free_conv_kernels(Matrix** kernels, int in_channels, int out_channels) {
+	for (int i = 0; i < out_channels; i++) {
+		for (int j = 0; j < in_channels; j++) {
+			free(kernels[i][j].data);
+		}
+		free(kernels[i]);
+	}
+}
+
+void _free_conv_data(ConvData* d, int out_channels) {
+	free(d->im2col->data);
+	free(d->im2col);
+
+	free(d->kernel_matrix->data);
+	free(d->kernel_matrix);
+
+	free(d->product->data);
+	free(d->product);
+
+	for (int i = 0; i < out_channels; i++) {
+		free(d->output[i].data);
+	}
+	free(d->output);
+}
+
+void _free_resnet_block_params(ResnetBlockParams* p, int embed_dim, int in_channels) {
+	_free_conv_kernels(p->conv_1_kernels, in_channels, embed_dim);
+	free(p->conv_1_kernels);
+	_free_conv_kernels(p->conv_2_kernels, embed_dim, embed_dim);
+	free(p->conv_2_kernels);
+	_free_conv_kernels(p->residual_conv_kernels, in_channels, embed_dim);
+	free(p->residual_conv_kernels);
+
+	free(p->time_weights->data);
+	free(p->time_weights);
+
+	free(p->time_biases->data);
+	free(p->time_biases);
+}
+
+void _free_resnet_block_data(ResnetBlockData* d, int embed_dim, int in_channels) {
+	free(d->group_norm_means_1);
+	free(d->group_norm_stdevs_1);
+	for (int i = 0; i < in_channels; i++) {
+		free(d->relu_1[i].data);
+	}
+	free(d->relu_1);
+
+	_free_conv_data(d->conv_1, embed_dim);
+	free(d->conv_1);
+
+	free(d->time_dense->data);
+	free(d->time_dense);
+
+	free(d->group_norm_means_2);
+	free(d->group_norm_stdevs_2);
+
+	// These three have the same dimensions, so just initialize them together
+	for (int i = 0; i < embed_dim; i++) {
+		free(d->relu_2[i].data);
+		free(d->dropout[i].data);
+		free(d->result[i].data);
+	}
+	free(d->relu_2);
+	free(d->dropout);
+	free(d->result);
+
+	_free_conv_data(d->conv_2, embed_dim);
+	_free_conv_data(d->residual_conv, embed_dim);
+	free(d->conv_2);
+	free(d->residual_conv);
+}
+
+void _free_self_attention_block_params(SelfAttentionParams* p) {
+	free(p->Q_proj->data);
+	free(p->Q_proj);
+
+	free(p->K_proj->data);
+	free(p->K_proj);
+
+	free(p->V_proj->data);
+	free(p->V_proj);
+
+	free(p->weights->data);
+	free(p->weights);
+
+	free(p->biases->data);
+	free(p->biases);
+}
+
+void _free_self_attention_block_data(SelfAttentionData* d, int embed_dim) {
+	free(d->input->data);
+	free(d->input);
+
+	free(d->Q_proj->data);
+	free(d->Q_proj);
+
+	free(d->K_proj->data);
+	free(d->K_proj);
+
+	free(d->V_proj->data);
+	free(d->V_proj);
+
+	free(d->attention_weights->data);
+	free(d->attention_weights);
+
+	free(d->attention->data);
+	free(d->attention);
+
+	free(d->product->data);
+	free(d->product);
+
+	free(d->dense->data);
+	free(d->dense);
+
+	for (int i = 0; i < embed_dim; i++) {
+		free(d->output[i].data);
+	}
+	free(d->output);
+}
+
+void free_model_params(ModelParams *p) {
+	// First downsampling layer: resnet block x2, downsampling convolution
+	_free_resnet_block_params(p->down_1_resnet_1, RESOLUTION_1_EMBED_DIM, 3);
+	free(p->down_1_resnet_1);
+	_free_resnet_block_params(p->down_1_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
+	free(p->down_1_resnet_2);
+	_free_conv_kernels(p->down_1_conv_kernels, RESOLUTION_1_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	free(p->down_1_conv_kernels);
+
+	// First downsampling layer: resnet block, self-attention block, resnet block, self-attention block, downsampling convolution
+	_free_resnet_block_params(p->down_2_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	free(p->down_2_resnet_1);
+	_free_self_attention_block_params(p->down_2_self_attention_1);
+	free(p->down_2_self_attention_1);
+	_free_resnet_block_params(p->down_2_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	free(p->down_2_resnet_2);
+	_free_self_attention_block_params(p->down_2_self_attention_2);
+	free(p->down_2_self_attention_2);
+	_free_conv_kernels(p->down_2_conv_kernels, RESOLUTION_2_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	free(p->down_2_conv_kernels);
+
+	// Third downsampling layer: resnet block x2 + downsampling convolution
+	_free_resnet_block_params(p->down_3_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	free(p->down_3_resnet_1);
+	_free_resnet_block_params(p->down_3_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	free(p->down_3_resnet_2);
+	_free_conv_kernels(p->down_3_conv_kernels, RESOLUTION_3_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(p->down_3_conv_kernels);
+
+	// Fourth downsampling layer: resnet block x2
+	_free_resnet_block_params(p->down_4_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(p->down_4_resnet_1);
+	_free_resnet_block_params(p->down_4_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(p->down_4_resnet_2);
+
+	// Mid layer: resnet block, self-attention block, resnet block
+	_free_resnet_block_params(p->mid_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(p->mid_resnet_1);
+	_free_self_attention_block_params(p->mid_self_attention);
+	free(p->mid_self_attention);
+	_free_resnet_block_params(p->mid_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(p->mid_resnet_2);
+
+	// First upsampling layer: resnet block x2, nearest neighbours upscaling + a convolution
+	_free_resnet_block_params(p->up_1_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(p->up_1_resnet_1);
+	_free_resnet_block_params(p->up_1_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(p->up_1_resnet_2);
+	_free_conv_kernels(p->up_1_conv_kernels, RESOLUTION_4_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	free(p->up_1_conv_kernels);
+
+	// Second upsampling layer: resnet block x2, nearest neighbours upscaling + a convolution
+	_free_resnet_block_params(p->up_2_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	free(p->up_2_resnet_1);
+	_free_resnet_block_params(p->up_2_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	free(p->up_2_resnet_2);
+	_free_conv_kernels(p->up_2_conv_kernels, RESOLUTION_3_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	free(p->up_2_conv_kernels);
+
+	// Third upsampling layer: resnet block, self-attention block, resnet block, self-attention block, nearest neighbours upscaling + a convolution
+	_free_resnet_block_params(p->up_3_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	free(p->up_3_resnet_1);
+	_free_self_attention_block_params(p->up_3_self_attention_1);
+	free(p->up_3_self_attention_1);
+	_free_resnet_block_params(p->up_3_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	free(p->up_3_resnet_2);
+	_free_self_attention_block_params(p->up_3_self_attention_2);
+	free(p->up_3_self_attention_2);
+	_free_conv_kernels(p->up_3_conv_kernels, RESOLUTION_2_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
+	free(p->up_3_conv_kernels);
+
+	// Fourth upsampling layer: resnet block x2
+	_free_resnet_block_params(p->up_4_resnet_1, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
+	free(p->up_4_resnet_1);
+	_free_resnet_block_params(p->up_4_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
+	free(p->up_4_resnet_2);
+
+	// Output layer: group normalization, non-linearity, and a final convolution
+	_free_conv_kernels(p->output_conv_kernels, RESOLUTION_1_EMBED_DIM, 3);
+	free(p->output_conv_kernels);
+}
+
+void free_model_data(ModelData* d) {
+	// Input data
+	for (int i = 0; i < 3; i++) {
+		free(d->X[i].data);
+	}
+	free(d->X);
+	free(d->time_embedding->data);
+	free(d->time_embedding);
+
+	// First downsampling layer: resnet block x2, downsampling convolution
+	_free_resnet_block_data(d->down_1_resnet_1, RESOLUTION_1_EMBED_DIM, 3);
+	free(d->down_1_resnet_1);
+	_free_resnet_block_data(d->down_1_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
+	free(d->down_1_resnet_2);
+	_free_conv_data(d->down_1_conv, RESOLUTION_2_EMBED_DIM);
+	free(d->down_1_conv);
+
+	// First downsampling layer: resnet block, self-attention block, resnet block, self-attention block, downsampling convolution
+	_free_resnet_block_data(d->down_2_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	free(d->down_2_resnet_1);
+	_free_self_attention_block_data(d->down_2_self_attention_1, RESOLUTION_2_EMBED_DIM);
+	free(d->down_2_self_attention_1);
+	_free_resnet_block_data(d->down_2_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	free(d->down_2_resnet_2);
+	_free_self_attention_block_data(d->down_2_self_attention_2, RESOLUTION_2_EMBED_DIM);
+	free(d->down_2_self_attention_2);
+	_free_conv_data(d->down_2_conv, RESOLUTION_3_EMBED_DIM);
+	free(d->down_2_conv);
+
+	// Third downsampling layer: resnet block x2 + downsampling convolution
+	_free_resnet_block_data(d->down_3_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	free(d->down_3_resnet_1);
+	_free_resnet_block_data(d->down_3_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	free(d->down_3_resnet_2);
+	_free_conv_data(d->down_3_conv, RESOLUTION_4_EMBED_DIM);
+	free(d->down_3_conv);
+
+	// Fourth downsampling layer: resnet block x2
+	_free_resnet_block_data(d->down_4_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(d->down_4_resnet_1);
+	_free_resnet_block_data(d->down_4_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(d->down_4_resnet_2);
+
+	// Mid layer: resnet block, self-attention block, resnet block
+	_free_resnet_block_data(d->mid_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(d->mid_resnet_1);
+	_free_self_attention_block_data(d->mid_self_attention, RESOLUTION_4_EMBED_DIM);
+	free(d->mid_self_attention);
+	_free_resnet_block_data(d->mid_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(d->mid_resnet_2);
+
+	// First upsampling layer: resnet block x2, nearest neighbours upscaling + a convolution
+	_free_resnet_block_data(d->up_1_resnet_1, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(d->up_1_resnet_1);
+	_free_resnet_block_data(d->up_1_resnet_2, RESOLUTION_4_EMBED_DIM, RESOLUTION_4_EMBED_DIM);
+	free(d->up_1_resnet_2);
+	for (int i = 0; i < RESOLUTION_4_EMBED_DIM; i++) {
+		free(d->up_1_nearest_neighbours[i].data);
+	}
+	free(d->up_1_nearest_neighbours);
+	_free_conv_data(d->up_1_conv, RESOLUTION_3_EMBED_DIM);
+	free(d->up_1_conv);
+
+	// Second upsampling layer: resnet block x2, nearest neighbours upscaling + a convolution
+	_free_resnet_block_data(d->up_2_resnet_1, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	free(d->up_2_resnet_1);
+	_free_resnet_block_data(d->up_2_resnet_2, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM);
+	free(d->up_2_resnet_2);
+	for (int i = 0; i < RESOLUTION_3_EMBED_DIM; i++) {
+		free(d->up_2_nearest_neighbours[i].data);
+	}
+	free(d->up_2_nearest_neighbours);
+	_free_conv_data(d->up_2_conv, RESOLUTION_2_EMBED_DIM);
+	free(d->up_2_conv);
+
+	// Third upsampling layer: resnet block, self-attention block, resnet block, self-attention block, nearest neighbours upscaling + a convolution
+	_free_resnet_block_data(d->up_3_resnet_1, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	free(d->up_3_resnet_1);
+	_free_self_attention_block_data(d->up_3_self_attention_1, RESOLUTION_2_EMBED_DIM);
+	free(d->up_3_self_attention_1);
+	_free_resnet_block_data(d->up_3_resnet_2, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM);
+	free(d->up_3_resnet_2);
+	_free_self_attention_block_data(d->up_3_self_attention_2, RESOLUTION_2_EMBED_DIM);
+	free(d->up_3_self_attention_2);
+	for (int i = 0; i < RESOLUTION_2_EMBED_DIM; i++) {
+		free(d->up_3_nearest_neighbours[i].data);
+	}
+	free(d->up_3_nearest_neighbours);
+	_free_conv_data(d->up_3_conv, RESOLUTION_1_EMBED_DIM);
+	free(d->up_3_conv);
+
+	// Fourth upsampling layer: resnet block x2
+	_free_resnet_block_data(d->up_4_resnet_1, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
+	free(d->up_4_resnet_1);
+	_free_resnet_block_data(d->up_4_resnet_2, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM);
+	free(d->up_4_resnet_2);
+
+	// Output layer: group normalization, non-linearity, and a final convolution
+	free(d->output_group_norm_means);
+	free(d->output_group_norm_stdevs);
+	for (int i = 0; i < RESOLUTION_1_EMBED_DIM; i++) {
+		free(d->output_relu[i].data);
+	}
+	free(d->output_relu);
+	_free_conv_data(d->output_conv, 3);
+	free(d->output_conv);
 }
 
 void _forward_attention(Matrix* X, SelfAttentionParams* params, SelfAttentionData* data) {
@@ -1171,14 +1482,14 @@ void init_parameters(ModelParams* p) {
 
 void init() {
 	ModelParams p;
-	ModelData d;
 
 	allocate_model_params(&p);
-	allocate_model_data(&d);
 
 	init_parameters(&p);
 
 	save_parameters(&p);
+
+	free_model_params(&p);
 }
 
 void train(int num_epochs) {
@@ -1218,6 +1529,12 @@ void train(int num_epochs) {
 	for (int i = 0; i < 5; i++) {
 		close(data_fds[i]);
 	}
+
+	free_model_params(&p);
+	free_model_data(&d);
+	free_model_params(&g);
+	free_model_params(&gm);
+	free_model_params(&gsm);
 }
 
 void run(int num_predictions) {
