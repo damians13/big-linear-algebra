@@ -2,6 +2,8 @@
 #include <math.h>
 #include <stdlib.h>
 
+const double PI = 3.14159265358979323846;
+
 void relu(matrix_float_t* data, int num) {
 	for (int i = 0; i < num; i++) {
 		if (data[i] < 0) {
@@ -60,4 +62,34 @@ void load_matrix_from_csv(Matrix* m, const char* filepath, int rows, int cols) {
 	free(csv_data);
 	m->rows = rows;
 	m->cols = cols;
+}
+
+// Sample a random value from a Gaussian distribution with mean 0 and stdev 1. Seed pointer should be thread safe
+double random_gaussian(unsigned int* seed) {
+	(void) seed;
+
+	double epsilon = 1e-8;
+	static double Z1;
+	static int available = 0;
+
+	if (available == 0) {
+		// Uses the Box-Muller transform to convert uniform random (from rand()) to Gaussian random
+		double U1 = (double) rand() / RAND_MAX;
+		while (U1 == 0) {
+			U1 = (double) rand() / RAND_MAX; // Resample to avoid log(0)
+		}
+		double U2 = (double) rand() / RAND_MAX;
+
+		double R = sqrt(-2 * log(U1));
+		double theta = 2 * PI * U2;
+		
+		double Z0 = R * cos(theta);
+		Z1 = R * sin(theta);
+
+		available = 1;
+		return Z0;
+	} else {
+		available = 0;
+		return Z1;
+	}
 }

@@ -769,6 +769,9 @@ void _free_self_attention_block_data(SelfAttentionData* d, int embed_dim) {
 	free(d->V_proj->data);
 	free(d->V_proj);
 
+	free(d->attention_weights_raw->data);
+	free(d->attention_weights_raw);
+
 	free(d->attention_weights->data);
 	free(d->attention_weights);
 
@@ -1341,7 +1344,7 @@ void _split_concat(Matrix* src, Matrix* dest, int dest_channels, bool second_hal
 		index_offset = dest_channels;
 	}
 	for (int c = 0; c < dest_channels; c++) {
-		memcpy(&dest[c], &src[c + index_offset], height * width * sizeof(matrix_float_t));
+		memcpy(dest[c].data, src[c + index_offset].data, height * width * sizeof(matrix_float_t));
 	}
 }
 
@@ -1419,7 +1422,7 @@ void backward(ModelParams* p, ModelData* d, ModelParams* g, ModelData* gd, Matri
 		matrix_add(&gd->down_2_resnet_2->result[c], &gd->up_3_input_concat_skip[c + RESOLUTION_2_EMBED_DIM]);
 	}
 	_backward_attention(p->down_2_self_attention_2, d->down_2_self_attention_2, g->down_2_self_attention_2, gd->down_2_self_attention_2, gd->down_2_resnet_2->result, SELF_ATTENTION_KEY_DIM);
-	_backward_resnet(p->down_2_resnet_2, g->down_2_resnet_2, d->down_2_resnet_2, gd->down_2_resnet_2, gd->down_2_self_attention_2->output, d->down_2_self_attention_2->output, d->time_embedding, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, GROUP_SIZE);
+	_backward_resnet(p->down_2_resnet_2, g->down_2_resnet_2, d->down_2_resnet_2, gd->down_2_resnet_2, gd->down_2_self_attention_2->output, d->down_2_self_attention_2->output, d->time_embedding, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, GROUP_SIZE);
 	_backward_attention(p->down_2_self_attention_1, d->down_2_self_attention_1, g->down_2_self_attention_1, gd->down_2_self_attention_1, gd->down_2_resnet_1->result, SELF_ATTENTION_KEY_DIM);
 	_backward_resnet(p->down_2_resnet_1, g->down_2_resnet_1, d->down_2_resnet_1, gd->down_2_resnet_1, gd->down_1_conv->output, d->down_1_conv->output, d->time_embedding, RESOLUTION_2_EMBED_DIM, RESOLUTION_2_EMBED_DIM, GROUP_SIZE);
 	
@@ -1428,7 +1431,7 @@ void backward(ModelParams* p, ModelData* d, ModelParams* g, ModelData* gd, Matri
 	for (int c = 0; c < RESOLUTION_1_EMBED_DIM; c++) {
 		matrix_add(&gd->down_1_resnet_2->result[c], &gd->up_4_input_concat_skip[c + RESOLUTION_1_EMBED_DIM]);
 	}
-	_backward_resnet(p->down_1_resnet_2, g->down_1_resnet_2, d->down_1_resnet_2, gd->down_1_resnet_2, gd->down_1_resnet_1->result, d->down_3_resnet_1->result, d->time_embedding, RESOLUTION_3_EMBED_DIM, RESOLUTION_3_EMBED_DIM, GROUP_SIZE);
+	_backward_resnet(p->down_1_resnet_2, g->down_1_resnet_2, d->down_1_resnet_2, gd->down_1_resnet_2, gd->down_1_resnet_1->result, d->down_1_resnet_1->result, d->time_embedding, RESOLUTION_1_EMBED_DIM, RESOLUTION_1_EMBED_DIM, GROUP_SIZE);
 	_backward_resnet(p->down_1_resnet_1, g->down_1_resnet_1, d->down_1_resnet_1, gd->down_1_resnet_1, gd->X, d->X, d->time_embedding, 3, RESOLUTION_1_EMBED_DIM, GROUP_SIZE);
 }
 
@@ -1896,12 +1899,27 @@ void train(int num_epochs) {
 	// load_parameters(&p);
 	init_parameters(&p);
 
+	unsigned int seed = 0;
+
 	load_example(d.X, data_fds[0]);
-	Matrix noise[3]; // TODO: Generate random noise (and malloc data to store it in)
+	Matrix noise[3];
+	for (int c = 0; c < 3; c++) {
+		noise[c].rows = IMAGE_HEIGHT;
+		noise[c].cols = IMAGE_WIDTH;
+		noise[c].data = malloc(IMAGE_HEIGHT * IMAGE_WIDTH * sizeof(matrix_float_t));
+
+		for (int i = 0; i < IMAGE_HEIGHT * IMAGE_WIDTH; i++) {
+			noise[c].data[i] = random_gaussian(&seed);
+		}
+	}
 	forward(&p, &d);
 	float loss = compute_mse_loss(noise, d.output_conv->output, 3);
 	(void) loss;
 	backward(&p, &d, &g, &gd, noise);
+
+	for (int c = 0; c < 3; c++) {
+		free(noise[c].data);
+	}
 
 	for (int i = 0; i < 5; i++) {
 		close(data_fds[i]);

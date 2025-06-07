@@ -213,17 +213,17 @@ void conv(Matrix* X, Matrix** kernels, ConvData* data, int in_channels, int out_
 
 void conv_ddx(Matrix* del_Y, ConvData* data, ConvData* grad_data, Matrix** del_kernels, Matrix* del_input, int in_channels, int stride) {
     Matrix* del_Q = grad_data->product;
-    Matrix* del_kernels_matrix = grad_data->im2col;
-    Matrix* del_input_matrix = grad_data->kernel_matrix;
+    Matrix* del_kernels_matrix = grad_data->kernel_matrix;
+    Matrix* del_input_matrix = grad_data->im2col;
     int kernel_size = del_kernels[0][0].cols;
 
     reshape_channels_matrix(del_Y, del_Q);
     matrix_transpose(data->im2col);
     matrix_multiply_inplace(data->im2col, del_Q, del_kernels_matrix);
-    _reshape_matrix_kernels(data->im2col, del_kernels);
+    _reshape_matrix_kernels(del_kernels_matrix, del_kernels);
     matrix_transpose(data->im2col);
     matrix_transpose(data->kernel_matrix);
     matrix_multiply_inplace(del_Q, data->kernel_matrix, del_input_matrix);
     matrix_transpose(data->kernel_matrix);
-    _col2im(data->kernel_matrix, del_input, kernel_size, in_channels, stride);
+    _col2im(del_input_matrix, del_input, kernel_size, in_channels, stride);
 }
