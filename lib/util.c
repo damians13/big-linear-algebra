@@ -10,12 +10,6 @@ void relu(matrix_float_t* data, int num) {
 	}
 }
 
-void relu_ddx(matrix_float_t* data, int num) {
-	for (int i = 0; i < num; i++) {
-		data[i] = data[i] > 0 ? 1 : 0;
-	}
-}
-
 void softmax(matrix_float_t* data, int rows, int cols) {
 	for (int i = 0; i < cols; i++) {
 		// Subtract the max value from each value to avoid overflow in expf
@@ -33,6 +27,27 @@ void softmax(matrix_float_t* data, int rows, int cols) {
 		}
 		for (int j = 0; j < rows; j++) {
 			data[i + j * cols] /= sum_of_exponents;
+		}
+	}
+}
+
+void softmax_row_wise(matrix_float_t* data, int rows, int cols) {
+	for (int i = 0; i < rows; i++) {
+		// Subtract the max value from each value to avoid overflow in expf
+		matrix_float_t max_value = -INFINITY;
+		for (int j = 0; j < cols; j++) {
+			if (data[j + i * cols] > max_value) {
+				max_value = data[j + i * cols];
+			}
+		}
+
+		matrix_float_t sum_of_exponents = 0;
+		for (int j = 0; j < cols; j++) {
+			data[j + i * cols] = exp(data[j + i * cols] - max_value);
+			sum_of_exponents += data[j + i * cols];
+		}
+		for (int j = 0; j < cols; j++) {
+			data[j + i * cols] /= sum_of_exponents;
 		}
 	}
 }

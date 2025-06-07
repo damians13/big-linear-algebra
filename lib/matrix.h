@@ -27,6 +27,7 @@ matrix_float_t frobenius_norm(struct Matrix m);
 matrix_float_t max_value(struct Matrix m);
 void matrix_z_score_normalize(Matrix* m);
 void matrix_add_tile_columns(struct Matrix* a, struct Matrix* b);
+void matrix_add_tile_rows(struct Matrix* a, struct Matrix* b);
 
 void matrix_multiply_inplace(Matrix* a, Matrix* b, Matrix* c);
 

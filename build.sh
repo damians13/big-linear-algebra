@@ -13,6 +13,6 @@ gcc -c lib/csv.c -g -std=c99 -o dist/csv.o
 gcc -c lib/bmp.c -g -std=c99 -o dist/bmp.o
 gcc -c lib/cifar10.c -g -std=c99 -o dist/cifar10.o
 gcc -c lib/conv.c -g -std=c99 -o dist/conv.o
-gcc -c lib/norm.c -g -std=c99 -o dist/norm.o
+gcc -c lib/norm.c $GCC_FLAGS -o dist/norm.o
 gcc -c lib/util.c -g -std=c99 -o dist/util.o
 gcc dist/* $GCC_FLAGS -o dist/main -lm

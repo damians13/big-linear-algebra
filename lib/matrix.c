@@ -193,3 +193,13 @@ void matrix_add_tile_columns(struct Matrix* a, struct Matrix* b) {
 		}
 	}
 }
+
+// Tiles the rows of matrix `b` (ie. reuses the rows) and adds the result to `a`.
+// Requires that a and b have the same number of cols
+void matrix_add_tile_rows(struct Matrix* a, struct Matrix* b) {
+	for (int i = 0; i < a->rows; i++) {
+		for (int j = 0; j < a->cols; j++) {
+			a->data[i * a->cols + j] += b->data[j];
+		}
+	}
+}
